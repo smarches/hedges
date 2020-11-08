@@ -10,82 +10,56 @@ HeapScheduler<> myheap;  // (equivalent to <Doub,void*>, actually)
 myheap.push(time);
 timeval = myheap.pop();
 */
+#include <utility>
+#include <type_traits>
+#include <algorithm>
+#include <vector>
+#include <limits>
+#include <iostream>
 
-template<class T=Doub, class U=void*>
-struct HeapScheduler {
-	static const Int defaultps = 1100000; // initial heap size
-	T bigval;
-	U lastcargo;
-	Int ps, ks;
-	NRvector<T> ar; // times
-	NRvector<U> br; // "cargo"
+// TODO: make this a vector of pairs
+template<class T, class U=void*>
+class HeapScheduler {
+    using TU = std::pair<T,U>;
+public:
+	constexpr size_t defaultps = 1100000; // initial heap size
+    constexpr T bigval{std::numeric_limits<T>::max()};
+	std::vector<TU> elems; // each item's timestamp is the sorting criterion so it can be processed LIFO?
 
-	HeapScheduler() : bigval(numeric_limits<T>::max()), ps(defaultps), ks(0), ar(ps,bigval), br(ps) {}
-	void push(T time, U cargo=U(NULL)) {  // lengthen list, add to end, sift up
-	// pushes a time and cargo onto the heap
-		Int k,mo;
-		if (ks == ps) resizear(2*ps);
-		k = ks++;
-		ar[k] = time;
-		br[k] = cargo;
-		while (k > 0 && ar[mo=(k-1)/2] > ar[k]) {
-			SWAP(ar[k],ar[mo]);  // swap with mother
-			SWAP(br[k],br[mo]);
-			k = mo;
-		}
+	HeapScheduler() {
+        // TODO: concept
+        static_assert<std::is_arithmetic_v<T>>;
+    }
+	void push(T time, U cargo = U{}) { 
+	    // pushes a time and cargo onto the heap
+        elems.push_back(std::make_pair(time,cargo));
+        std::push_heap(std::begin(elems),std::end(elems),[](TU& A,TU& B){
+            return A.first < B.first;
+        });
 	}
-	T pop() { return pop(lastcargo); } // if no argument, return cargo in HeapScheduler::lastcargo
-	T pop(U &cargo) { // return top of heap, move last to top, shorten list, sift down
+	// TU pop() { return pop(lastcargo); } // if no argument, return cargo in HeapScheduler::lastcargo
+	TU pop() { // return top of heap, move last to top, shorten list, sift down
 	// pops the next (in order) time and its cargo from the heap
 	// returns numeric_limits::max() time, and U() cargo, when heap is empty
-		Int k=0,rdau,ldau,mindau;
-		T ans=ar[0];
-		U cans = br[0];
-		if ((ks--) > 0) {
-			ar[0] = ar[ks];
-			br[0] = br[ks];
-			ar[ks] = bigval;
-			br[ks] = U();
-			while ((ldau=2*k+1) < ks) {
-				rdau = ldau + 1; // might be a bigval, but that is OK
-				mindau = (ar[ldau] < ar[rdau] ? ldau : rdau);
-				if (ar[k] > ar[mindau]) {
-					SWAP(ar[k],ar[mindau]); // swap with smaller of two daughters
-					SWAP(br[k],br[mindau]);
-				}
-				else break;
-				k = mindau;
-			}
-		}
-		cargo = cans;
-		return ans;
-	}
-	void resizear(Int newps) { // only used internally
-		ar.resize(newps,true); //resize preserving contents
-		br.resize(newps,true);
-		for (int i=ks;i<newps;i++) ar[i] = bigval;
-		ps = newps;
+        if (!elems.empty()) {
+            std::pop_heap(std::begin(elems),std::end(elems));
+            return elems.pop_back();
+        } else {
+            return std::make_pair(bigval,U{});
+        }
 	}
 	void rewind() { // zero out the heap w/o changing its size in memory
-		ks = 0;
-		ar.assign(ps, bigval);
-		br.resize(ps);
-		//for (int i = 0; i < ps; i++) {
-		//	ar[i] = bigval;
-		//	br[i] = U(NULL);
-		//}
+		elems.resize(defaultps);
+		elems.assign(defaultps, std::pair(bigval,U{}));
+        elems.shrink_to_fit();
 	}
 	void reinit() { // zero out the heap and give back memory
-		ks = 0;
-		ps = defaultps;
-		ar.assign(ps, bigval);
-		br.resize(ps);
+		elems.clear();
 	}
 
-/*	void printheap() { // only used for debugging
-		printf("heap is:\n");
-		for (int i=0;i<ks;i++) printf("%d  %.5f  %.5f\n",i,ar[i],br[i]);
-		printf("end heap\n");
+	void printheap() const { 
+		std::cout << "heap is:\n";
+		for (size_t i=0;i<elems.size();++i) std::cout << i << ", " << elems[i].first << " " << elems[i].second << '\n';
+		std::cout << "end heap\n";
 	}
-*/
 };
