@@ -1,9 +1,14 @@
 #include "nr3python.h"
-#include "ran.h"
+#include <vector>
+#include <random>
 #include "reed_solomon_schifra.h"
 
 SchifraCode<255, 32> rs;
-Ran ran;
+
+static std::mt19937 rng{std::random_device{}};
+static std::uniform_real_distribution runif(0.,1.);
+
+using VecUchar = std::vector<unsigned char>;
 
 static PyObject* rsencode(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
@@ -27,13 +32,13 @@ static PyObject* rsencode(PyObject *self, PyObject *pyargs) {
 static PyObject* rsdecode(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
 	VecUchar received;
-	VecInt locations;
+	std::vector<int> locations;
 	if (args.size() == 1) {
 		received = VecUchar(args[0]);
 		locations.resize(0);
 	} else if (args.size() == 2) {
 		received = VecUchar(args[0]);
-		locations = VecInt(args[1]);
+		locations = std::vector<int>(args[1]);
 	} else {
 		NRpyException("rsencode takes 1 or 2 arguments");
 		return NRpyObject(0);
@@ -42,7 +47,7 @@ static PyObject* rsdecode(PyObject *self, PyObject *pyargs) {
 		NRpyException("rsdecode requires array with dtype=uint8 \n");
 		return NRpyObject(0);
 	}
-	Int errs_detected, errs_corrected, err_code;
+	int errs_detected, errs_corrected, err_code;
 	bool recoverable;
 	VecUchar decoded = rs.decode(received, locations, errs_detected, errs_corrected, err_code, recoverable);
 	return NRpyTuple(
@@ -56,16 +61,16 @@ static PyObject* rsdecode(PyObject *self, PyObject *pyargs) {
 }
 
 static PyObject* makeerasures(PyObject *self, PyObject *pyargs) {
+    
 	NRpyArgs args(pyargs);
 	VecUchar incodeword(args[0]);
 	VecUchar codeword(incodeword); // so won't alter incodeword
-	Int nerase(NRpyInt(args[1]));
-	Int i, merase = 0, nn = codeword.size();
-	Doub p;
-	VecInt location(nerase);
-	for (i = 0; i < nn; i++) {
-		p = Doub(nerase - merase) / Doub(nn - i);
-		if (ran.doub() < p) {
+	int nerase{NRpyInt(args[1])}, merase{0};
+
+	std::vector<int> location(nerase);
+	for (size_t i = 0; i < codeword.size(); i++) {
+		double p = static_cast<double>(nerase - merase) / (nn - i);
+		if (runif(rng) < p) {
 			location[merase++] = i;
 			codeword[i] += 1; // wraparound; anything to change it is ok
 		}
@@ -81,12 +86,11 @@ static PyObject* makeerrors(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
 	VecUchar incodeword(args[0]);
 	VecUchar codeword(incodeword); // so won't alter incodeword
-	Int nerror(NRpyInt(args[1]));
-	Int i, merror = 0, nn = codeword.size();
-	Doub p;
-	for (i = 0; i < nn; i++) {
-		p = Doub(nerror-merror) / Doub(nn-i);
-		if (ran.doub() < p) {
+	int nerror(NRpyInt(args[1])), merror{0};
+	
+	for (size_t i = 0; i < codeword.size(); i++) {
+		double p = static_cast<double>(nerror-merror) / (nn-i);
+		if (runif(rng) < p) {
 			codeword[i] += 1; // wraparound; anything to change it is ok
 			++merror;
 		}
@@ -100,7 +104,7 @@ static PyMethodDef NRpyRS_methods[] = {
 	{ "rsencode", rsencode, METH_VARARGS,
 	"codetext = rsencode(uint8_array_length_255)" },
 	{ "rsdecode", rsdecode, METH_VARARGS,
-	"(decoded, errs_detected, errs_corrected, err_code, recoverable) = rsdecode(uint8_array_length_255[, VecInt erasure_locations])" },
+	"(decoded, errs_detected, errs_corrected, err_code, recoverable) = rsdecode(uint8_array_length_255[, std::vector<int> erasure_locations])" },
 	{ "makeerasures", makeerasures, METH_VARARGS,
 	"(newcodetext,locations) = makeerasures(codetext,nerasures)" },
 	{ "makeerrors", makeerrors, METH_VARARGS,

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 g++ -fPIC -fpermissive -w -c NRpyDNAcode.cpp -o NRpyDNAcode.o -I/usr/include/python2.7 \
  -I/usr/local/lib/python2.7/dist-packages/numpy/core/include
