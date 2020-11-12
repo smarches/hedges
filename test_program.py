@@ -10,14 +10,10 @@
 # We encode a specified number of packets from known plaintext, create DNA errors, then
 # decode the DNA and compare.
 
-# from numpy import *
 import numpy as np
 import NRpyDNAcode as code
 import NRpyRS as RS
 
-#import os
-#mydir = "D:\\Dropbox\\Projects\\DNAcode\\CodeAsPublished"
-#os.chdir(mydir)
 #print help(code) # uncomment to see NRpyDNAcode help output
 
 coderates = np.array([np.NaN, 0.75, 0.6, 0.5, 1./3., 0.25, 1./6.]) # table of coderates 1..6
@@ -51,7 +47,7 @@ leftlen = len(leftprimer)
 rightlen = len(rightprimer)
 strandlen = totstrandlen - leftlen - rightlen
 strandsperpacketmessage = strandsperpacket - strandsperpacketcheck
-(NSALT, MAXSEQ, NSTAK, HLIMIT) = code.getparams() # get settable code parameters
+NSALT, MAXSEQ, NSTAK, HLIMIT = code.getparams() # get settable code parameters
 code.setparams(8*strandIDbytes, MAXSEQ, NSTAK, hlimit) # change NSALT and HLIMIT
 bytesperstrand = int(strandlen*coderates[coderatecode]/4.)    
 messbytesperstrand = bytesperstrand - strandIDbytes - strandrunoutbytes # payload bytes per strand
@@ -70,9 +66,9 @@ if UseWiz :
     def getwiz(n) : # return next n chars from wiztext
         global wizoffset, wizlen
         if wizoffset + n > wizlen : wizoffset = 0
-        bytes = wizbytes[wizoffset:wizoffset+n]
+        wbytes = wizbytes[wizoffset:wizoffset+n]
         wizoffset += n
-        return bytes
+        return wbytes
 else :
     def getwiz(n) :
         return np.random.randint(0,high=256,size=n,dtype=np.uint8)
@@ -103,7 +99,7 @@ def protectmesspacket(packetin) : # fills in the RS check strands
             regin[i] = packet[i,((j+i)% messbytesperstrand)+strandIDbytes]
         regout = RS.rsencode(regin)
         for i in range(strandsperpacket) :
-            packet[i,((j+i)% messbytesperstrand)+strandIDbytes] = regout[i]
+            packet[i,((j+i) % messbytesperstrand) + strandIDbytes] = regout[i]
     return packet
 
 # functions to encode a packet to DNA strands, and decode DNA strands to a packet
@@ -135,7 +131,7 @@ def dnatomess(dnapacket) :
         lenmin = min(len(mess),bytesperstrand)
         mpacket[i,:lenmin] = mess[:lenmin]
         epacket[i,:lenmin] = 0
-    return (mpacket,epacket,baddecodes,erasures)
+    return mpacket, epacket, baddecodes, erasures
 
 #functions to R-S correct a packet and extract its payload to an array of bytes
 def correctmesspacket(packetin,epacket) :
@@ -153,7 +149,7 @@ def correctmesspacket(packetin,epacket) :
             regin[i] = packet[i,((j+i)% messbytesperstrand)+strandIDbytes]
             erase[i] = epacket[i,((j+i)% messbytesperstrand)+strandIDbytes]
         locations = np.array(np.argwhere(erase),dtype=np.int32)
-        (decoded, errs_detected, errs_corrected, errcode, ok) = RS.rsdecode(regin,locations)
+        decoded, errs_detected, errs_corrected, errcode, ok = RS.rsdecode(regin,locations)
         tot_detect += errs_detected
         tot_uncorrect += max(0,(errs_detected-errs_corrected))
         max_detect = max(max_detect,errs_detected)
@@ -167,8 +163,8 @@ def extractplaintext(cpacket) :
     # extract plaintext from a corrected packet
     plaintext = np.zeros(strandsperpacketmessage*messbytesperstrand,dtype=np.uint8)
     for i in range(strandsperpacketmessage) :
-        plaintext[i*messbytesperstrand:(i+1)*messbytesperstrand] = (
-            cpacket[i,strandIDbytes:strandIDbytes+messbytesperstrand]
+        plaintext[i * messbytesperstrand: (i+1) * messbytesperstrand] = (
+            cpacket[i,strandIDbytes:strandIDbytes + messbytesperstrand]
         )
     return plaintext
 

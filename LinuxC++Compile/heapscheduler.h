@@ -18,17 +18,18 @@ timeval = myheap.pop();
 #include <iostream>
 
 // TODO: make this a vector of pairs
-template<class T, class U=void*>
+template<class T, class U>
 class HeapScheduler {
     using TU = std::pair<T,U>;
 public:
-	constexpr size_t defaultps = 1100000; // initial heap size
+	constexpr size_t default_size{1100000}; // initial heap size
     constexpr T bigval{std::numeric_limits<T>::max()};
 	std::vector<TU> elems; // each item's timestamp is the sorting criterion so it can be processed LIFO?
 
 	HeapScheduler() {
         // TODO: concept
         static_assert<std::is_arithmetic_v<T>>;
+        TU.reserve(default_size);
     }
 	void push(T time, U cargo = U{}) { 
 	    // pushes a time and cargo onto the heap
@@ -49,8 +50,8 @@ public:
         }
 	}
 	void rewind() { // zero out the heap w/o changing its size in memory
-		elems.resize(defaultps);
-		elems.assign(defaultps, std::pair(bigval,U{}));
+		elems.resize(default_size);
+		elems.assign(default_size, std::pair(bigval,U{}));
         elems.shrink_to_fit();
 	}
 	void reinit() { // zero out the heap and give back memory
