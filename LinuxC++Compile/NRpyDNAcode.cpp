@@ -40,6 +40,7 @@ namespace GP {
     unsigned int NSTACK = default_runtimes[2];  // initial size of list of hypotheses
     unsigned int HLIMIT = default_runtimes[3]; // limit on number of hypotheses tried before failure
     std::int32_t NSP = NSALT; // updated by setcoderate()
+    std::int32_t lastpattnumber; // updated by setcoderate()
 
     constexpr std::array<unsigned int,4> default_dnas{ 12, 8, 4, 4 };
     // user-adjustable parameters for DNA-related encoding constraints
@@ -66,8 +67,8 @@ GF4word leftprimer, rightprimer;
 std::vector<Ullong> primersalt;
  // contains number of bits in each vbit: 0, 1, or 2 (all initialized to 1)
  // set in setcoderate_C but accessed in various places
-std::vector<std::uint8_t> pattarr(GP::MAXSEQ+2,1);
-std::int32_t lastpattnumber = 3;
+std::vector<std::uint8_t> pattarr;
+
 
 Ran ran; // (11015);
 
@@ -79,8 +80,6 @@ double finalscore;
 // GF4reg dnawinmask((Ullong(1) << 2 * DNAWINDOW) - 1);
 // GF4reg dnaoldmask((Ullong(1) << 2 * (DNAWINDOW-1)) - 1); // used to set oldest to "A"
 // constexpr GF4reg acgtacgt{0x1b1b1b1b1b1b1b1bllu}; // "ACGTACGTACGTACGT" used for initialization
-
-// Uchar dnac_ok[4];
 
 // TODO: turn digest into a simple class templated by NPREV, NSEQBITS, HSALT
 static Ranhash ranhash;
@@ -246,7 +245,7 @@ std::int32_t vbitlen(std::int32_t nmb) {  // how long is message in vbits?  (pat
 	std::int32_t ksize{0}, nn{0};
     while( ksize++ ) {  // how many Mbits do we need?
 		if (nn >= nmb) break;
-		if (ksize >= MAXSEQ) NRpyException("vbitlen: MAXSEQ too small");
+		if (ksize >= GP::MAXSEQ) NRpyException("vbitlen: MAXSEQ too small");
 		nn += pattarr[ksize];
 	}
 	return ksize;
@@ -261,6 +260,7 @@ static PyObject* minstrandlen(PyObject *self, PyObject *pyargs) {
 
 // given the 'seed' value, create a hashed value
 // TODO: use std::hash
+// is there a point of exporting this?
 static PyObject* hashint(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
 	if (args.size() != 1) {
@@ -273,7 +273,7 @@ static PyObject* hashint(PyObject *self, PyObject *pyargs) {
 }
 
 // side effect: populates pattarr, sets GP::reward
-// globals: accesses leftprimer, GP::NSALT
+// globals: accesses leftprimer, GP::NSALT, GP::MAXSEQ
 void setcoderate_C(int pattnumber, const char* left_primer, const char* right_primer) { // some standard patterns
 	findprimersalt(left_primer,right_primer);
     std::vector<std::uint8_t> pattern;
@@ -304,7 +304,7 @@ void setcoderate_C(int pattnumber, const char* left_primer, const char* right_pr
 	for (unsigned int i = LPRIMER; i < GP::MAXSEQ; i++) pattarr[i] = pattern[i % npattrn];
 	const auto vsalt = vbitlen(GP::NSALT);
 	GP::NSP = vsalt + LPRIMER;
-    lastpattnumber = pattnumber;
+    GP::lastpattnumber = pattnumber;
 }
 
 static PyObject* setcoderate(PyObject *self, PyObject *pyargs) {
@@ -387,7 +387,6 @@ GF4word encode_C(const char *message, size_t n, int len=0) { // dnac
 	GF4reg prevcode = acgtacgt; // initialize with no runs and balanced cg
 	for (size_t k = 0; k < nm; k++) { // on decoding, k is called seq
 		Mbit messagebit = vbits[k];
-		auto nbits = pattarr[k];
 		if (k < LPRIMER) {
 			salt = primersalt[k];
 		}
@@ -410,13 +409,11 @@ GF4word encode_C(const char *message, size_t n, int len=0) { // dnac
 		    regout = (regout + messagebit) % mod;
             codetext[k] = dnac_ok[regout];
         }
+		auto nbits = pattarr[k];
 		prevbits = ((prevbits << nbits) & prevmask) | messagebit; // variable number
-		prevcode = ((prevcode << 2) | codetext[k]) & dnawinmask;
+		prevcode = ((prevcode << 2) | codetext[k]) & dnawinmask;  // shift code by 1
 	}
     std::copy(std::cbegin(rightprimer),std::cend(rightprimer),std::begin(codetext) + nm);
-	// for (k = 0; k < RPRIMER; k++) {
-	// 	codetext[k + nm] = rightprimer[k];
-	// }
 	return codetext;
 }
 
@@ -425,33 +422,6 @@ GF4word encode_C(VecUchar& message, int len=0) {
 }
 GF4word encode_C(char *message, int len=0) {
 	return encode_C(message, strlen(message),len);
-}
-
-static PyObject* encode(PyObject *self, PyObject *pyargs) {
-	NRpyArgs args(pyargs);
-	
-	if (args.size() > 2) {
-		NRpyException("encode takes 1 or 2 arguments");
-		return NRpyObject(0); // formerly NULL
-	}
-	if (PyArray_TYPE(args[0]) != PyArray_UBYTE) NRpyException("encode requires array with dtype=uint8 \n");
-	VecUchar message(args[0]);
-	int len =  args.size() > 1 ? NRpyInt(args[1]) : 0;
-	const auto codetext = encode_C(message,len);
-	return NRpyObject(codetext);
-}
-
-static PyObject* encodestring(PyObject *self, PyObject *pyargs) {
-	NRpyArgs args(pyargs);
-	// GF4word empty(0);
-	if (args.size() > 2) {
-		NRpyException("encodestring takes 1 or 2 arguments");
-		return NRpyObject(0); // formerly NULL
-	}
-	const char *message = NRpyCharP(args[0]);
-	int len =  args.size() > 1 ? NRpyInt(args[1]) : 0;
-	const auto codetext = encode_C(message,len);
-	return NRpyObject(codetext);
 }
 
 struct Hypothesis {
@@ -468,8 +438,9 @@ struct Hypothesis {
 	Hypothesis(int) {} // so that can cast from zero in NRvector constructor
 
     // globals: accesses hypostack,NPREV,HSALT,leftprimer,GP::DNAWINDOW,
-    // codetextlen_g,dnac_ok,pattarr,deletion,reward,substitution,insertion,dither
-	int init_from_predecessor (const GF4reg& codetext,int pred, Mbit mbit, int skew) {
+    // pattarr,deletion,reward,substitution,insertion,dither
+    // does the same calculations as encode_C but just for the previous char rather than a whole message
+	int init_from_predecessor(const GF4reg& codetext,int pred, Mbit mbit, int skew) {
 		
         static constexpr Ullong prevmask{(1ULL << GP::NPREV) - 1};
         static constexpr Ullong saltmask{(1ULL << GP::HSALT) - 1};
@@ -549,114 +520,114 @@ struct Hypothesis {
 std::vector<Hypothesis> hypostack;
 
 // globals: heap hypostack,GP::NSTACK
+// TODO: turn into a destructor
 void release() { // give back heap and hypostack memory
 	heap.reinit();
-	hypostack.resize(GP::NSTACK, false);
+	hypostack.resize(GP::NSTACK);
 }
 
 //globals: heap, hypostack
+// TODO: turn into constructor
 void init_heap_and_stack() {
-	// hypostackp = &hypostack;
-	// if (GP::nnstak < GP::NSTACK) {
-	// 	GP::nnstak = GP::NSTACK;
-	// 	hypostack.resize(GP::NSTACK, false);
-	// }
+	
+	hypostack.clear();
     Hypothesis h;
     h.init_root();
-	hypostack.push_back(h);
-	// GP::nhypo = 1;
+	hypostack.emplace_back(h);
 	heap.rewind();
 	heap.push(1.e10, 0);
 }
 
+
+static PyObject* encode(PyObject *self, PyObject *pyargs) {
+	NRpyArgs args(pyargs);
+	
+	if (args.size() > 2) {
+		NRpyException("encode takes 1 or 2 arguments");
+		return NRpyObject(0); // formerly NULL
+	}
+	if (PyArray_TYPE(args[0]) != PyArray_UBYTE) NRpyException("encode requires array with dtype=uint8 \n");
+	VecUchar message(args[0]);
+	int len =  args.size() > 1 ? NRpyInt(args[1]) : 0;
+	const auto codetext = encode_C(message,len);
+	return NRpyObject(codetext);
+}
+
+static PyObject* encodestring(PyObject *self, PyObject *pyargs) {
+	NRpyArgs args(pyargs);
+
+	if (args.size() > 2) {
+		NRpyException("encodestring takes 1 or 2 arguments");
+		return NRpyObject(0); // formerly NULL
+	}
+	const char *message = NRpyCharP(args[0]);
+	int len =  args.size() > 1 ? NRpyInt(args[1]) : 0;
+	const auto codetext = encode_C(message,len);
+	return NRpyObject(codetext);
+}
+
 // globals: sets GP::errcode
-// accessses heap,
-int shoveltheheap(int limit, int nmessbits = 0) {
+// accessses heap, MAXSEQ
+// returns 'nfinal', the # of total hypotheses considered
+// TODO: turn into method
+int shoveltheheap(const GF4word& text, int nmessbits,size_t hlimit) {
 	// given the heap, keep processing it until offset limit, hypothesis limit, or an error is reached
     const auto seqmax = vbitlen(nmessbits);
+    const size_t limit{text.size()};
 	int qq, qqmax = -1, ofmax = -1;
-
+    constexpr std::array<int,3> skews{0,-1,1};
 	GP::errcode = 0;
 	while (true) {
         const auto res = heap.pop();
         double currscore = res.first;
         qq = res.second;
-		// double currscore = heap.pop(qq);
 		const auto hp = hypostack[qq];
 		auto seq = hp.seq;
-        // cheezy hack that depends on the heap values being initialized to std::numeric_limits<double>::max()
+		
 		if (seq > GP::MAXSEQ) NRpyException("shoveltheheap: MAXSEQ too small");
-		int nguess = 1 << pattarr[seq + 1]; // i.e., 1, 2, or 4
 		if (hp.offset > ofmax) { // keep track of farthest gotten to
 			ofmax = hp.offset;
 			qqmax = qq;
 		}
-		if (currscore > 1.e10) break; // heap is empty
+		if (currscore > 1.e10) break; // heap is empty (TODO: change this)
 		if (hp.offset >= limit-1) break; // errcode 0 (nominal success)
 		if (nmessbits > 0 && seq >= seqmax-1) break; // ditto when no. of message bits specified
-		// if (GP::nhypo > GP::HLIMIT) {
-        if(hypostack.size() > GP::HLIMIT) { // not really needed
+        if (hypostack.size() > hlimit) { 
 			GP::errcode = 2;
 			return qqmax;
 		}
-        // just use push_back!
-		// if (GP::nhypo + 12 >= GP::nnstak) {
-		// 	GP::nnstak *= 2;
-		// 	hypostack.resize(GP::nnstak, true);
-		// 	if (hypostack.size() != GP::nnstak) NRpyException("resize of hypostack failed");
-		// }
-		for (Uchar mbit = 0; mbit < nguess; mbit++) {
-            Hypothesis h();
-            if(h.init_from_predecessor(qq, mbit, 0)) {
-                hypostack.push_back(h);
-                heap.push(h.score,hypostack.size());
+
+		const int nguess = 1 << pattarr[seq + 1]; // i.e., 1, 2, or 4
+        for(auto skew : skews) {
+            for (Uchar mbit = 0; mbit < nguess; mbit++) {
+                Hypothesis h();
+                if(h.init_from_predecessor(text, qq, mbit, skew)) {
+                    hypostack.push_back(h);
+                    heap.push(h.score,hypostack.size());
+                }
             }
-			// if (hypostack[GP::nhypo].init_from_predecessor(qq, mbit, 0)) { // substitution
-			// 	heap.push(hypostack[GP::nhypo].score, GP::nhypo);
-			// 	GP::nhypo++;
-			// }
-		}
-		for (Uchar mbit = 0; mbit < nguess; mbit++) {
-            Hypothesis h();
-            if(h.init_from_predecessor(qq, mbit, -1)) {
-                hypostack.push_back(h);
-                heap.push(h.score,hypostack.size());
-            }
-			// if (hypostack[GP::nhypo].init_from_predecessor(qq, mbit, -1)) { // deletion
-			// 	heap.push(hypostack[GP::nhypo].score, GP::nhypo);
-			// 	GP::nhypo++;
-			// }
-		}
-		for (Uchar mbit = 0; mbit < nguess; mbit++) {
-            Hypothesis h();
-            if(h.init_from_predecessor(qq, mbit, 1)) {
-                hypostack.push_back(h);
-                heap.push(h.score,hypostack.size());
-            }
-			// if (hypostack[GP::nhypo].init_from_predecessor(qq, mbit, 1)) { // insertion
-			// 	heap.push(hypostack[GP::nhypo].score, GP::nhypo);
-			// 	GP::nhypo++;
-			// }
-		}
+        }
 	}
 	return qq; // final position
 }
 
+// accesses hypostack
+// TODO: turn into method
 VecMbit traceback(int nfinal) {
 	int kk = 0, q = nfinal;
 	while ((q = hypostack[q].predi) > 0) ++kk; // get length of chain (this is the seq field!?)
-	VecMbit ans(kk + 1); // each with variable bits
-    // update global params:
+    // update global params (thjs need not be done here?)
 	finalscore = hypostack[nfinal].score;
 	finaloffset = hypostack[nfinal].offset;
 	finalseq = hypostack[nfinal].seq;
-	q = nfinal;
-	int k = kk;
+	// todo - refactor so we loop through once
+	VecMbit ans(kk + 1,0);
     // populate the answer
-	ans[k--] = hypostack[q].messagebit;
+	q = nfinal;
+	ans[kk--] = hypostack[q].messagebit;
 	while ((q = hypostack[q].predi) > 0) {
-		ans[k] = hypostack[q].messagebit;
-		--k;
+		ans[kk] = hypostack[q].messagebit;
+		--kk;
 	}
 	return ans;
 }
@@ -672,6 +643,7 @@ VecInt allprevbits;
 VecInt allsalt;
 VecInt allnewsalt;
 
+// TODO: turn into method
 void traceback_fulldata(const std::vector<Hypothesis>& hypo_stack,int nfinal) {
 // TODO: questionable! messagebit might be 0, 1 or 2 bits.  how are you supposed to know?
 // see packvbits()
@@ -689,9 +661,7 @@ void traceback_fulldata(const std::vector<Hypothesis>& hypo_stack,int nfinal) {
 	allprevbits.resize(kk + 1);
 	allsalt.resize(kk + 1);
 	allnewsalt.resize(kk + 1);
-	// finalscore = hypo_stack[nfinal].score;
-	// finaloffset = hypo_stack[nfinal].offset;
-	// finalseq = hypo_stack[nfinal].seq;
+
 	q = nfinal;
 	int k = kk;
 	allseq[k] = hypo_stack[q].seq;
@@ -718,31 +688,35 @@ void traceback_fulldata(const std::vector<Hypothesis>& hypo_stack,int nfinal) {
 	}
 }
 
-static PyObject* releaseall(PyObject *self, PyObject *pyargs) {
-	NRpyArgs args(pyargs);
-	heap.reinit();
-	hypostack.resize(GP::NSTACK);
-	allseq.resize(0);
-	alloffset.resize(0);
-	allscore.resize(0);
-	allpredi.resize(0);
-	allmessagebit.resize(0);
-	allprevbits.resize(0);
-	allsalt.resize(0);
-	allnewsalt.resize(0);
-	return NRpyObject(int(0));
-}
-
-int decode_prep(GF4word& text,int nmessbits) {
+int decode_prep(GF4word& text,int nmessbits,size_t hlimit = GP::HLIMIT) {
 	init_heap_and_stack();
     // returning the former 'nfinal' global var
-    return shoveltheheap(text.size(), nmessbits);
+    return shoveltheheap(text, nmessbits, hlimit);
 }
 
-VecUchar decode_C(GF4word& codetext, int nmessbits) {
-    auto nfinal = decode_prep(codetext,nmessbits); // should nmessbits also be zero here?
+VecUchar decode_C(GF4word& codetext, int nmessbits,size_t hlimit) {
+    auto nfinal = decode_prep(codetext,nmessbits,hlimit); // should nmessbits also be zero here?
 	VecMbit trba = traceback(nfinal);
 	return packvbits(trba, nmessbits); // truncate only at the end
+}
+
+// loops throuh the different predefined 'patterns' to get coderates @ the given parameter values
+// TODO: refactor so that the funcs using GP::MAXSEQ, lastpattnumber take them as parameters,
+// since this function should just forward args
+std::vector<int> gethowfar(int hlimit, int maxseq, GF4word &codetext, const char* leftpr, const char* rightpr) {
+	std::array<int,6> ans{0}; // pattern 0 is not defined
+	int MAXSEQ_save = GP::MAXSEQ, pattno_save = GP::lastpattnumber;
+	GP::MAXSEQ = maxseq;
+	for (int i = 0; i < 6; i++) {
+		setcoderate_C(i + 1, leftpr, rightpr);
+		auto dc = decode_C(codetext,0,hlimit);
+		ans[i] = finaloffset;
+	}
+	// restore the globals
+	GP::MAXSEQ = MAXSEQ_save;
+    // its a bit odd since we 'restore' the old coderate but with these new primers...
+	setcoderate_C(pattno_save, leftpr, rightpr);
+	return ans;
 }
 
 void decode_fulldata_C(GF4word& codetext) {
@@ -766,7 +740,7 @@ static PyObject* decode(PyObject *self, PyObject *pyargs) {
 	}
 	if (PyArray_TYPE(args[0]) != PyArray_UBYTE) NRpyException("decode requires array with dtype=uint8 \n");
 	GF4word codetext(args[0]);
-	VecUchar plaintext = decode_C(codetext,nmessbits);
+	VecUchar plaintext = decode_C(codetext,nmessbits,GP::HLIMIT);
 	return NRpyTuple(
 		NRpyObject(GP::errcode),
 		NRpyObject(plaintext),
@@ -821,26 +795,6 @@ static PyObject* revcomp(PyObject *self, PyObject *pyargs) {
 	return NRpyObject(arr);
 }
 
-// loops throuh the different predefined 'patterns' to get coderates @ the given parameter values
-// TODO: refactor so that the funcs using GP::HLIMIT, GP::MAXSEQ, lastpattnumber take them as parameters,
-// since this function should just forward args
-std::vector<int> gethowfar(int hlimit, int maxseq, GF4word &codetext, const char* leftpr, const char* rightpr) {
-	std::array<int,6> ans; // pattern 0 is not defined
-	int HLIMIT_save = GP::HLIMIT, MAXSEQ_save = GP::MAXSEQ, pattno_save = lastpattnumber;
-	GP::HLIMIT = hlimit; // change the globals
-	GP::MAXSEQ = maxseq;
-	for (int ipatt = 0; ipatt < 6; ipatt++) {
-		setcoderate_C(ipatt + 1, leftpr, rightpr);
-		auto dc = decode_C(codetext);
-		ans[ipatt] = finaloffset;
-	}
-	GP::HLIMIT = HLIMIT_save; // restore the globals
-	GP::MAXSEQ = MAXSEQ_save;
-	lastpattnumber = pattno_save;
-	setcoderate_C(lastpattnumber, leftpr, rightpr);
-	return ans;
-}
-
 static PyObject* tryallcoderates(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
 	if (args.size() != 5) {
@@ -884,6 +838,21 @@ static PyObject* makegoodsense(PyObject *self, PyObject *pyargs) {
 	const GF4word codeword(args[1]);
 	GF4word newcodeword = make_sense(left_primer,codeword);
 	return NRpyObject(newcodeword);
+}
+
+// this should probably happen automatically?
+static PyObject* releaseall(PyObject *self, PyObject *pyargs) {
+	NRpyArgs args(pyargs);
+	release();
+	allseq.resize(0);
+	alloffset.resize(0);
+	allscore.resize(0);
+	allpredi.resize(0);
+	allmessagebit.resize(0);
+	allprevbits.resize(0);
+	allsalt.resize(0);
+	allnewsalt.resize(0);
+	return NRpyObject(int(0));
 }
 
 // boilerplate 

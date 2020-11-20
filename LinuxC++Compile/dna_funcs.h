@@ -162,3 +162,5 @@ GF4word make_sense(const std::string& left_primer,const GF4word& codeword) {
 	const double rscore = primerscore(left_primer, rcodeword);
 	return (rscore <= lscore) ? rcodeword : codeword;
 }
+
+// class responsible for performing encoding
