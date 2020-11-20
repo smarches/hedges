@@ -25,38 +25,36 @@ using Mbit = unsigned char; // semantically VARIABLE NUMBER of plaintext bits
 using VecInt = std::vector<int>;
 using VecMbit = std::vector<Mbit>;  // message bits unpacked to variable
 
-
-// not normally user-adjustable
-constexpr unsigned int NPREV = 8; // number of hashed previous bits
-constexpr unsigned int NSEQBITS = 10; // number of hashed sequence number bits
-constexpr unsigned int HSALT = 24; // number of hashed bits of salt
-
-// constexpr Ullong prevmask{(Ullong(1) << NPREV) - 1};
-// constexpr Ullong seqnomask{(Ullong(1) << NSEQBITS) - 1};
-// constexpr Ullong saltmask{(Ullong(1) << HSALT) - 1};
-
 // global parameters
 namespace GP {
 
-    // user-adjustable parameters relating to runtime constraints
-    unsigned int NSALT = 24; // change salt after this many message bits (thus protecting them)
-    unsigned int MAXSEQ = 2500; // maximum number of vbits in a message (one-time work in setcoderate() )
-    unsigned int NSTACK = 110'000;  // initial size of list of hypotheses
-    unsigned int HLIMIT = 1'000'000; // limit on number of hypotheses tried before failure
+    // not normally user-adjustable
+    constexpr unsigned int NPREV = 8; // number of hashed previous bits
+    constexpr unsigned int NSEQBITS = 10; // number of hashed sequence number bits
+    constexpr unsigned int HSALT = 24; // number of hashed bits of salt
 
+    constexpr std::array<unsigned int,4> default_runtimes{ 24, 2500, 110'000, 1'000'000 };
+    // user-adjustable parameters relating to runtime constraints
+    unsigned int NSALT = default_runtimes[0]; // change salt after this many message bits (thus protecting them)
+    unsigned int MAXSEQ = default_runtimes[1]; // maximum number of vbits in a message (one-time work in setcoderate() )
+    unsigned int NSTACK = default_runtimes[2];  // initial size of list of hypotheses
+    unsigned int HLIMIT = default_runtimes[3]; // limit on number of hypotheses tried before failure
+    std::int32_t NSP = NSALT; // updated by setcoderate()
+
+    constexpr std::array<unsigned int,4> default_dnas{ 12, 8, 4, 4 };
     // user-adjustable parameters for DNA-related encoding constraints
-    std::int32_t NSP = NSALT;// + LPRIMER; // updated by setcoderate()
-    std::int32_t DNAWINDOW = 12; // window in which DNA constraints imposed
-    std::int32_t MAXGC = 8; // max GC in window
-    std::int32_t MINGC = 4; // min GC in window
-    std::int32_t MAXRUN = 4; // max length of homopolymers
+    std::int32_t DNAWINDOW = default_dnas[0]; // window in which DNA constraints imposed
+    std::int32_t MAXGC = default_dnas[1]; // max GC in window
+    std::int32_t MINGC = default_dnas[2]; // min GC in window
+    std::int32_t MAXRUN = default_dnas[3]; // max length of homopolymers
 
     // rewards and penalties applied at each position when decoding
-    double reward = -0.13;
-    double substitution = 1.;
-    double deletion = 1.;
-    double insertion = 1.;
-    double dither = 0.;
+    constexpr std::array<double,5> default_scores{-0.13, 1., 1., 1., 0.};
+    double reward = default_scores[0];
+    double substitution = default_scores[1];
+    double deletion = default_scores[2];
+    double insertion = default_scores[3];
+    double dither = default_scores[4];
 
     // related to the hypothesis/heap data structures:
     // std::int32_t nhypo{0};
@@ -67,8 +65,16 @@ namespace GP {
 GF4word leftprimer, rightprimer;
 std::vector<Ullong> primersalt;
  // contains number of bits in each vbit: 0, 1, or 2 (all initialized to 1)
+ // set in setcoderate_C but accessed in various places
 std::vector<std::uint8_t> pattarr(GP::MAXSEQ+2,1);
 std::int32_t lastpattnumber = 3;
+
+Ran ran; // (11015);
+
+HeapScheduler<double,std::int32_t> heap;
+// set by traceback/traceback_fulldata (from decode_C); 
+std::int32_t finaloffset, finalseq;
+double finalscore;
 
 // GF4reg dnawinmask((Ullong(1) << 2 * DNAWINDOW) - 1);
 // GF4reg dnaoldmask((Ullong(1) << 2 * (DNAWINDOW-1)) - 1); // used to set oldest to "A"
@@ -97,10 +103,10 @@ static Ranhash ranhash;
 // }
 
 std::int32_t digest(Ullong bits, std::int32_t seq, Ullong salt, std::int32_t mod) {
-    constexpr static Ullong seqnomask{(1LLU << NSEQBITS) - 1};
-    const auto masked_seq = static_cast<Ullong>(seq) & seqnomask) << NPREV;
-    const auto res = ranhash.int64(((masked_seq | bits) << HSALT) | salt) % mod;
-	return static_cast<std::int32_t>(res);
+    constexpr static Ullong seqnomask{(1LLU << GP::NSEQBITS) - 1};
+    const auto masked_seq = (static_cast<Ullong>(seq) & seqnomask) << GP::NPREV;
+    const auto res = ranhash.int64(((masked_seq | bits) << GP::HSALT) | salt) % mod;
+	return res;
 }
 
 static PyObject* getversion(PyObject *self, PyObject *pyargs) {
@@ -118,13 +124,12 @@ static PyObject* getparams(PyObject *self, PyObject *pyargs) {
 		NULL);
 }
 
-// TODO: refactor so these aren't hardcoded in two different places
 static PyObject* restoreparams(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
-	GP::NSALT  = 24;
-	GP::MAXSEQ = 2500;
-	GP::NSTACK = 110000;
-	GP::HLIMIT = 1000000;
+	GP::NSALT  = GP::default_runtimes[0];
+	GP::MAXSEQ = GP::default_runtimes[1];
+	GP::NSTACK = GP::default_runtimes[2];
+	GP::HLIMIT = GP::default_runtimes[3];
 	return NRpyObject(std::int32_t(0));
 }
 
@@ -152,13 +157,12 @@ static PyObject* getdnaconstraints(PyObject *self, PyObject *pyargs) {
     );
 }
 
-// TODO: refactor so these aren't hardcoded in two different places
 static PyObject* restorednaconstraints(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
-	GP::DNAWINDOW = 12;
-	GP::MAXGC = 8;
-	GP::MINGC = 4;
-	GP::MAXRUN = 4;
+	GP::DNAWINDOW = GP::default_dnas[0];
+	GP::MAXGC = GP::default_dnas[1];
+	GP::MINGC = GP::default_dnas[2];
+	GP::MAXRUN = GP::default_dnas[3];
 	return NRpyObject(std::int32_t(0));
 }
 
@@ -189,11 +193,11 @@ static PyObject* getscores(PyObject *self, PyObject *pyargs) {
 
 static PyObject* restorescores(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
-	GP::reward = -0.13;
-	GP::substitution = 1.;
-	GP::deletion = 1.;
-	GP::insertion = 1.;
-	GP::dither = 0.;
+	GP::reward = GP::default_scores[0];
+	GP::substitution = GP::default_scores[1];
+	GP::deletion = GP::default_scores[2];
+	GP::insertion = GP::default_scores[3];
+	GP::dither = GP::default_scores[4];
 	return NRpyObject(std::int32_t(0));
 }
 
@@ -211,15 +215,6 @@ static PyObject* setscores(PyObject *self, PyObject *pyargs) {
 	return NRpyObject(std::int32_t(0));
 }
 
-// more globals
-
-Ran ran; // (11015);
-GF4char* codetext_g; // set in decode, used by init_from_predecessor
-std::int32_t codetextlen_g;   // ditto
-HeapScheduler<double,std::int32_t> heap;
-std::int32_t nfinal;
-std::int32_t finaloffset, finalseq;
-double finalscore;
 
 // side effects: sets values of leftprimer, rightprimer, and primersalt
 void findprimersalt(const char* leftpr, const char* rightpr) { // set salt to match a leftprimer
@@ -309,6 +304,7 @@ void setcoderate_C(int pattnumber, const char* left_primer, const char* right_pr
 	for (unsigned int i = LPRIMER; i < GP::MAXSEQ; i++) pattarr[i] = pattern[i % npattrn];
 	const auto vsalt = vbitlen(GP::NSALT);
 	GP::NSP = vsalt + LPRIMER;
+    lastpattnumber = pattnumber;
 }
 
 static PyObject* setcoderate(PyObject *self, PyObject *pyargs) {
@@ -324,7 +320,6 @@ static PyObject* setcoderate(PyObject *self, PyObject *pyargs) {
 	}
 	const char *leftpr = NRpyCharP(args[1]);
 	const char *rightpr = NRpyCharP(args[2]);
-	lastpattnumber = pattnumber;
 	setcoderate_C(pattnumber, leftpr, rightpr);
 	return NRpyObject(std::int32_t(0));
 }
@@ -374,11 +369,11 @@ VecUchar packvbits(const VecMbit& vbits, int nmessbits) {
 }
 
 // globals: accesses GP::DNAWINDOW,GP::MAXSEQ,leftprimer,rightprimer,primersalt,
-// GP::NSP,dnac_ok
+// GP::NSP,pattarr
 GF4word encode_C(const char *message, size_t n, int len=0) { // dnac
 	
-    static constexpr Ullong prevmask{(Ullong(1) << NPREV) - 1};
-    static constexpr Ullong saltmask{(Ullong(1) << HSALT) - 1};
+    static constexpr Ullong prevmask{(Ullong(1) << GP::NPREV) - 1};
+    static constexpr Ullong saltmask{(Ullong(1) << GP::HSALT) - 1};
     static constexpr Ullong acgtacgt{0x1b1b1b1b1b1b1b1bllu}; // "ACGTACGTACGTACGT" used for initialization
     const Ullong dnawinmask = (1ULL << 2 * GP::DNAWINDOW) - 1;
 	GF4word vbits = unpackvbits(message, n, len);
@@ -474,10 +469,10 @@ struct Hypothesis {
 
     // globals: accesses hypostack,NPREV,HSALT,leftprimer,GP::DNAWINDOW,
     // codetextlen_g,dnac_ok,pattarr,deletion,reward,substitution,insertion,dither
-	int init_from_predecessor (int pred, Mbit mbit, int skew) {
+	int init_from_predecessor (const GF4reg& codetext,int pred, Mbit mbit, int skew) {
 		
-        static constexpr Ullong prevmask{(1ULL << NPREV) - 1};
-        static constexpr Ullong saltmask{(1ULL << HSALT) - 1};
+        static constexpr Ullong prevmask{(1ULL << GP::NPREV) - 1};
+        static constexpr Ullong saltmask{(1ULL << GP::HSALT) - 1};
         if(hypostack.size() <= pred) throw("predecessor does not exist on the hypothesis stack");
         const size_t LPRIMER{leftprimer.size()};
         const Ullong dnawinmask = (1ULL << 2 * GP::DNAWINDOW) - 1;
@@ -502,7 +497,7 @@ struct Hypothesis {
 		}
 		else mysalt = salt;
 		offset = hp.offset + 1 + skew;
-		if (offset >= codetextlen_g) return 0; // i.e., false
+		if (offset >= codetext.size()) return 0; // i.e., false
 		// calculate predicted message under this hypothesis
 		prevcode = hp.prevcode;
         int regout;
@@ -526,7 +521,7 @@ struct Hypothesis {
 		if (skew < 0) { //deletion
 			mypenalty = GP::deletion;			
 		} else {
-			bool discrep = regout == codetext_g[offset];  // the only place where a check is possible!
+			bool discrep = regout == codetext[offset];  // the only place where a check is possible!
 			if (skew == 0) mypenalty = discrep ? GP::reward : GP::substitution;
 			else { // insertion
 				mypenalty = GP::insertion + (discrep ? GP::reward : GP::substitution);
@@ -576,7 +571,7 @@ void init_heap_and_stack() {
 
 // globals: sets GP::errcode
 // accessses heap,
-void shoveltheheap(int limit, int nmessbits = 0) {
+int shoveltheheap(int limit, int nmessbits = 0) {
 	// given the heap, keep processing it until offset limit, hypothesis limit, or an error is reached
     const auto seqmax = vbitlen(nmessbits);
 	int qq, qqmax = -1, ofmax = -1;
@@ -602,8 +597,7 @@ void shoveltheheap(int limit, int nmessbits = 0) {
 		// if (GP::nhypo > GP::HLIMIT) {
         if(hypostack.size() > GP::HLIMIT) { // not really needed
 			GP::errcode = 2;
-			nfinal = qqmax;
-			return;
+			return qqmax;
 		}
         // just use push_back!
 		// if (GP::nhypo + 12 >= GP::nnstak) {
@@ -645,10 +639,10 @@ void shoveltheheap(int limit, int nmessbits = 0) {
 			// }
 		}
 	}
-	nfinal = qq; // final position
+	return qq; // final position
 }
 
-VecMbit traceback() {
+VecMbit traceback(int nfinal) {
 	int kk = 0, q = nfinal;
 	while ((q = hypostack[q].predi) > 0) ++kk; // get length of chain (this is the seq field!?)
 	VecMbit ans(kk + 1); // each with variable bits
@@ -678,7 +672,7 @@ VecInt allprevbits;
 VecInt allsalt;
 VecInt allnewsalt;
 
-void traceback_fulldata(const std::vector<Hypothesis>& hypo_stack) {
+void traceback_fulldata(const std::vector<Hypothesis>& hypo_stack,int nfinal) {
 // TODO: questionable! messagebit might be 0, 1 or 2 bits.  how are you supposed to know?
 // see packvbits()
 	int kk = 0, q = nfinal;
@@ -695,9 +689,9 @@ void traceback_fulldata(const std::vector<Hypothesis>& hypo_stack) {
 	allprevbits.resize(kk + 1);
 	allsalt.resize(kk + 1);
 	allnewsalt.resize(kk + 1);
-	finalscore = hypo_stack[nfinal].score;
-	finaloffset = hypo_stack[nfinal].offset;
-	finalseq = hypo_stack[nfinal].seq;
+	// finalscore = hypo_stack[nfinal].score;
+	// finaloffset = hypo_stack[nfinal].offset;
+	// finalseq = hypo_stack[nfinal].seq;
 	q = nfinal;
 	int k = kk;
 	allseq[k] = hypo_stack[q].seq;
@@ -739,23 +733,22 @@ static PyObject* releaseall(PyObject *self, PyObject *pyargs) {
 	return NRpyObject(int(0));
 }
 
-VecUchar decode_C(GF4word &codetext, int nmessbits=0) {
-	codetext_g = &codetext[0]; // set the pointer
-	codetextlen_g = codetext.size();
+int decode_prep(GF4word& text,int nmessbits) {
 	init_heap_and_stack();
-    // THIS WAS BUG: //last arg was nmessbits, but now always do whole codetext
-	shoveltheheap(codetext.size(), nmessbits);
-	VecMbit trba = traceback();
-	VecUchar pack = packvbits(trba, nmessbits); // truncate only at the end
-	return pack;
+    // returning the former 'nfinal' global var
+    return shoveltheheap(text.size(), nmessbits);
 }
 
-void decode_fulldata_C(GF4word codetext) {
-	codetext_g = &codetext[0]; // set the pointer
-	codetextlen_g = codetext.size();
-	init_heap_and_stack();
-	shoveltheheap(codetext.size(), 0);
-	traceback_fulldata(hypostack);
+VecUchar decode_C(GF4word& codetext, int nmessbits) {
+    auto nfinal = decode_prep(codetext,nmessbits); // should nmessbits also be zero here?
+	VecMbit trba = traceback(nfinal);
+	return packvbits(trba, nmessbits); // truncate only at the end
+}
+
+void decode_fulldata_C(GF4word& codetext) {
+    auto nfinal = decode_prep(codetext,0);
+    // sets a bunch of vectors
+	traceback_fulldata(hypostack,nfinal);
 }
 
 static PyObject* decode(PyObject *self, PyObject *pyargs) {
@@ -815,19 +808,7 @@ static PyObject* decode_fulldata(PyObject *self, PyObject *pyargs) {
 	);
 }
 
-// in-place reverse complement for GF4word
-void revcomp_C(GF4word& arr) {
-	const auto len = arr.size();
-	static constexpr Uchar TGCA[] = { 3,2,1,0 };
-	// for (size_t i=0; i < len/2; i++) std::swap(arr[i],arr[len-1-i]);
-    std::reverse(std::begin(arr),std::end(arr));
-    std::for_each(std::begin(arr),std::end(arr),[](auto& e){
-        e = e > 3 ? e : TGCA[e];
-    });
-	// for (size_t i=0; i < len;  i++) arr[i] = (arr[i] > 3 ? arr[i] : TGCA[arr[i]]);
-}
-
-// questionable exposing this if it only has a side-effect on the input string
+// changed to return the reverse-complement rather than modifying it in-place
 static PyObject* revcomp(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
 	if (args.size() != 1) {
@@ -836,8 +817,8 @@ static PyObject* revcomp(PyObject *self, PyObject *pyargs) {
 	}
 	if (PyArray_TYPE(args[0]) != PyArray_UBYTE) NRpyException("revcomp requires array with dtype=uint8 \n");
 	GF4word arr(args[0]);
-	revcomp_C(arr);
-	return NRpyObject(0);
+    auto ans = revcomp(arr);
+	return NRpyObject(arr);
 }
 
 // loops throuh the different predefined 'patterns' to get coderates @ the given parameter values
@@ -876,75 +857,19 @@ static PyObject* tryallcoderates(PyObject *self, PyObject *pyargs) {
 	return NRpyObject(maxoffsets);
 }
 
-// TODO: separate into C++ function and Python wrapper
 static PyObject* createerrors(PyObject *self, PyObject *pyargs) {
-    static std::mt19937 rng{std::random_device{}};
-    static std::uniform_real_distrubition runif(0.,1.);
-    static std::uniform_int_distribution rint(0,3);
 	NRpyArgs args(pyargs);
 	if (args.size() != 4) {
 		NRpyException("createerrors takes exactly 4 arguments");
 		return NRpyObject(0); // formerly NULL
 	}
 	if (PyArray_TYPE(args[0]) != PyArray_UBYTE) NRpyException("createrrors requires array with dtype=uint8 \n");
-	GF4word codetext(args[0]);
+	const std::string codetext(args[0]);
 	double srate = NRpyDoub(args[1]); 
 	double drate = NRpyDoub(args[2]); 
-	double irate = NRpyDoub(args[3]); 
-	int n=0, nn = codetext.size(), k = 0;
-	GF4word ans(2 * nn); // overkill
-	while (n < nn) {
-		if (runif(rng) < irate) { // insertion
-			ans[k++] = rint(rng);
-			continue;
-		}
-		if (runif(rng) < drate) { // deletion
-			++n;
-			continue;
-		}
-		if (runif(rng) < srate) { //substitution or errorfree
-			// ans[k++] = (codetext[n++] + (rint(rng) % 3) + 1) % 4;
-            ans[k++] = rint(rng);
-		} else {
-			ans[k++] = codetext[n++];
-		}
-	}
-	ans.resize(k);
+	double irate = NRpyDoub(args[3]);
+    const auto ans = dna_errors(srate,drate,irate);
 	return NRpyObject(ans);
-}
-
-double primerscore(const std::string& a,const std::string& b) {
-	// returns penalty of match (large is bad)
-    // TODO: sync with global vars??
-	static constexpr char ACGT[] = "ACGT";
-	const double mispen = 1., gappen = 1., skewpen = 1.;
-	const size_t ia{ain.size()}, ib{b.size()};
-    // TODO: use Eigen or Armadillo
-	MatDoub cost(ia + 1, ib + 1);
-	cost[0][0] = 0.;
-	for (size_t i = 1; i <= ia; i++) cost[i][0] = cost[i - 1][0] + skewpen;
-	for (size_t i = 1; i <= ib; i++) cost[0][i] = cost[0][i - 1] + skewpen;
-	for (size_t i = 1; i <= ia; i++) {
-        for (j = 1; j <= ib; j++) {
-		    double dn = cost[i - 1][j] + ((j == ib) ? skewpen : gappen);
-		    double rt = cost[i][j - 1] + ((i == ia) ? skewpen : gappen);
-		    double dg = cost[i - 1][j - 1] + ((ain[i - 1] == ACGT[bin[j - 1]]) ? -1. : mispen);
-		    cost[i][j] = std::min(std::min(dn, rt), dg);
-        }
-	}
-	return cost[ia][ib];
-}
-
-void makesense_C(const char* left_primer, GF4word& codeword) {
-	// reverse complement codeword (in place) if that makes left_primer agree better
-	// const auto len = strlen(left_primer);
-	const double lscore = primerscore(left_primer, codeword);
-	GF4word rcodeword(codeword);
-	revcomp_C(rcodeword);
-	const double rscore = primerscore(left_primer, rcodeword);
-	if (rscore <= lscore) {
-		codeword = rcodeword;
-	}
 }
 
 static PyObject* makegoodsense(PyObject *self, PyObject *pyargs) {
@@ -953,15 +878,13 @@ static PyObject* makegoodsense(PyObject *self, PyObject *pyargs) {
 		NRpyException("makegoodsense takes exactly 2 arguments");
 		return NRpyObject(0);
 	}
-    // confusingly shadowed the global var. leftprimer! renamed to left_primer
-	const char *left_primer = NRpyCharP(args[0]);
 	if (PyArray_TYPE(args[1]) != PyArray_UBYTE) NRpyException("makegoodsense requires array with dtype=uint8 \n");
-	GF4word codeword(args[1]);
-	GF4word newcodeword(codeword);
-	makesense_C(left_primer, newcodeword);
+
+	const std::string left_primer(NRpyCharP(args[0]));
+	const GF4word codeword(args[1]);
+	GF4word newcodeword = make_sense(left_primer,codeword);
 	return NRpyObject(newcodeword);
 }
-
 
 // boilerplate 
 static PyMethodDef NRpyDNAcode_methods[] = {
