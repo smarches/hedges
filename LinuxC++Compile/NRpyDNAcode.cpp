@@ -108,6 +108,43 @@ std::int32_t digest(Ullong bits, std::int32_t seq, Ullong salt, std::int32_t mod
 	return res;
 }
 
+// side effects: sets values of leftprimer, rightprimer, and primersalt
+void findprimersalt(const char* leftpr, const char* rightpr) { // set salt to match a leftprimer
+	const auto np = strlen(leftpr), mp = strlen(rightpr);
+	constexpr char ACGT[] = "ACGTacgt";
+    constexpr int num_try{100};
+	std::array<unsigned,256> ACGTvalue{0};
+
+	leftprimer.resize(np);
+	rightprimer.resize(mp);
+	primersalt.resize(np);
+
+	for (size_t i = 0; i < 8; i++) ACGTvalue[ACGT[i]] = i % 4;
+	for (size_t k = 0; k < np; k++) leftprimer[k] = ACGTvalue[leftpr[k]];
+	for (size_t k = 0; k < mp; k++) rightprimer[k] = ACGTvalue[rightpr[k]];
+	for (size_t k = 0; k < np; k++) {
+		for (int i = 0; i < num_try; i++) { // try up to 100 times (what??)
+			auto regout = digest(0ULL, k, i, 4);
+			if (regout == leftprimer[k]) {
+				primersalt[k] = i;
+				break;
+			}
+		}
+	}
+}
+
+// TODO: reparameterize (pass in patarr)
+// global: accesses pattarr, GP::MAXSEQ
+std::int32_t vbitlen(std::int32_t nmb) {  // how long is message in vbits?  (patarr must already be set)
+	std::int32_t ksize{0}, nn{0};
+    while( ksize++ ) {  // how many Mbits do we need?
+		if (nn >= nmb) break;
+		if (ksize >= GP::MAXSEQ) NRpyException("vbitlen: MAXSEQ too small");
+		nn += pattarr[ksize];
+	}
+	return ksize;
+}
+
 static PyObject* getversion(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
 	return NRpyObject(ThisVersion);
@@ -214,43 +251,6 @@ static PyObject* setscores(PyObject *self, PyObject *pyargs) {
 	return NRpyObject(std::int32_t(0));
 }
 
-
-// side effects: sets values of leftprimer, rightprimer, and primersalt
-void findprimersalt(const char* leftpr, const char* rightpr) { // set salt to match a leftprimer
-	const auto np = strlen(leftpr), mp = strlen(rightpr);
-	constexpr char ACGT[] = "ACGTacgt";
-    constexpr int num_try{100};
-	std::array<unsigned,256> ACGTvalue{0};
-
-	leftprimer.resize(np);
-	rightprimer.resize(mp);
-	primersalt.resize(np);
-	for (size_t i = 0; i < 8; i++) ACGTvalue[ACGT[i]] = i % 4;
-	for (size_t k = 0; k < np; k++) leftprimer[k] = ACGTvalue[leftpr[k]];
-	for (size_t k = 0; k < mp; k++) rightprimer[k] = ACGTvalue[rightpr[k]];
-	for (size_t k = 0; k < np; k++) {
-		for (int i = 0; i < num_try; i++) { // try up to 100 times (what??)
-			auto regout = digest(0ULL, k, i, 4);
-			if (regout == leftprimer[k]) {
-				primersalt[k] = i;
-				break;
-			}
-		}
-	}
-}
-
-// TODO: reparameterize (pass in patarr)
-// global: accesses pattarr, GP::MAXSEQ
-std::int32_t vbitlen(std::int32_t nmb) {  // how long is message in vbits?  (patarr must already be set)
-	std::int32_t ksize{0}, nn{0};
-    while( ksize++ ) {  // how many Mbits do we need?
-		if (nn >= nmb) break;
-		if (ksize >= GP::MAXSEQ) NRpyException("vbitlen: MAXSEQ too small");
-		nn += pattarr[ksize];
-	}
-	return ksize;
-}
-
 static PyObject* minstrandlen(PyObject *self, PyObject *pyargs) {
 	NRpyArgs args(pyargs);
 	const auto nbytes = NRpyInt(args[0]);
@@ -301,10 +301,55 @@ void setcoderate_C(int pattnumber, const char* left_primer, const char* right_pr
 	pattarr.assign(GP::MAXSEQ + 2, 1);
 	const auto n_pattern{pattern.size()}, LPRIMER{leftprimer.size()};
     std::fill(std::begin(pattarr),std::begin(pattarr) + LPRIMER,0);
-	for (unsigned int i = LPRIMER; i < GP::MAXSEQ; i++) pattarr[i] = pattern[i % npattrn];
+	for (unsigned int i = LPRIMER; i < GP::MAXSEQ; i++) pattarr[i] = pattern[i % n_pattern];
 	const auto vsalt = vbitlen(GP::NSALT);
 	GP::NSP = vsalt + LPRIMER;
     GP::lastpattnumber = pattnumber;
+}
+
+// globals: sets GP::errcode
+// accessses heap, MAXSEQ
+// returns 'nfinal', the # of total hypotheses considered
+// TODO: turn into method
+int shoveltheheap(const GF4word& text, int nmessbits,size_t hlimit) {
+	// given the heap, keep processing it until offset limit, hypothesis limit, or an error is reached
+    const auto seqmax = vbitlen(nmessbits);
+    const size_t limit{text.size()};
+	int qq, qqmax = -1, ofmax = -1;
+    constexpr std::array<int,3> skews{0,-1,1};
+	GP::errcode = 0;
+	while (true) {
+        const auto res = heap.pop();
+        double currscore = res.first;
+        qq = res.second;
+		const auto hp = hypostack[qq];
+		auto seq = hp.seq;
+		
+		if (seq > GP::MAXSEQ) NRpyException("shoveltheheap: MAXSEQ too small");
+		if (hp.offset > ofmax) { // keep track of farthest gotten to
+			ofmax = hp.offset;
+			qqmax = qq;
+		}
+		if (currscore > 1.e10) break; // heap is empty (TODO: change this)
+		if (hp.offset >= limit-1) break; // errcode 0 (nominal success)
+		if (nmessbits > 0 && seq >= seqmax-1) break; // ditto when no. of message bits specified
+        if (hypostack.size() > hlimit) { 
+			GP::errcode = 2;
+			return qqmax;
+		}
+
+		const int nguess = 1 << pattarr[seq + 1]; // i.e., 1, 2, or 4
+        for(auto skew : skews) {
+            for (Uchar mbit = 0; mbit < nguess; mbit++) {
+                Hypothesis h();
+                if(h.init_from_predecessor(text, qq, mbit, skew)) {
+                    hypostack.push_back(h);
+                    heap.push(h.score,hypostack.size());
+                }
+            }
+        }
+	}
+	return qq; // final position
 }
 
 static PyObject* setcoderate(PyObject *self, PyObject *pyargs) {
@@ -328,13 +373,12 @@ static PyObject* setcoderate(PyObject *self, PyObject *pyargs) {
 // n should be length of message
 VecMbit unpackvbits(const char *message, size_t n, std::int32_t len) {
 	int nmb{8*n};
-	Uchar bit;
 	const auto ksize = std::max(vbitlen(nmb), len - rightprimer.size()); // aim for codetext of length len if possible
 	VecMbit ans(ksize,0);
 	size_t i = j = 0;
 	for (size_t k = 0; k < ksize; k++) {
 		for (int k1 = 0; k1 < pattarr[k]; k1++) {
-			bit = (i < n ? (message[i] >> (7-j++)) & 1 : 0);
+			Uchar bit = i < n ? (message[i] >> (7 - j++)) & 1 : 0;
 			if (j == 8) { j = 0; ++i; }
 			ans[k] = (ans[k] << 1) | bit;
 		}
@@ -374,7 +418,7 @@ GF4word encode_C(const char *message, size_t n, int len=0) { // dnac
 	
     static constexpr Ullong prevmask{(Ullong(1) << GP::NPREV) - 1};
     static constexpr Ullong saltmask{(Ullong(1) << GP::HSALT) - 1};
-    static constexpr Ullong acgtacgt{0x1b1b1b1b1b1b1b1bllu}; // "ACGTACGTACGTACGT" used for initialization
+    static constexpr Ullong acgtacgt{0x1b1b1b1b1b1b1b1bllu}; // "ACGTACGTACGTACGT"
     const Ullong dnawinmask = (1ULL << 2 * GP::DNAWINDOW) - 1;
 	GF4word vbits = unpackvbits(message, n, len);
 	const int nm{vbits.size()}; // number of variable bits encoded
@@ -564,51 +608,6 @@ static PyObject* encodestring(PyObject *self, PyObject *pyargs) {
 	int len =  args.size() > 1 ? NRpyInt(args[1]) : 0;
 	const auto codetext = encode_C(message,len);
 	return NRpyObject(codetext);
-}
-
-// globals: sets GP::errcode
-// accessses heap, MAXSEQ
-// returns 'nfinal', the # of total hypotheses considered
-// TODO: turn into method
-int shoveltheheap(const GF4word& text, int nmessbits,size_t hlimit) {
-	// given the heap, keep processing it until offset limit, hypothesis limit, or an error is reached
-    const auto seqmax = vbitlen(nmessbits);
-    const size_t limit{text.size()};
-	int qq, qqmax = -1, ofmax = -1;
-    constexpr std::array<int,3> skews{0,-1,1};
-	GP::errcode = 0;
-	while (true) {
-        const auto res = heap.pop();
-        double currscore = res.first;
-        qq = res.second;
-		const auto hp = hypostack[qq];
-		auto seq = hp.seq;
-		
-		if (seq > GP::MAXSEQ) NRpyException("shoveltheheap: MAXSEQ too small");
-		if (hp.offset > ofmax) { // keep track of farthest gotten to
-			ofmax = hp.offset;
-			qqmax = qq;
-		}
-		if (currscore > 1.e10) break; // heap is empty (TODO: change this)
-		if (hp.offset >= limit-1) break; // errcode 0 (nominal success)
-		if (nmessbits > 0 && seq >= seqmax-1) break; // ditto when no. of message bits specified
-        if (hypostack.size() > hlimit) { 
-			GP::errcode = 2;
-			return qqmax;
-		}
-
-		const int nguess = 1 << pattarr[seq + 1]; // i.e., 1, 2, or 4
-        for(auto skew : skews) {
-            for (Uchar mbit = 0; mbit < nguess; mbit++) {
-                Hypothesis h();
-                if(h.init_from_predecessor(text, qq, mbit, skew)) {
-                    hypostack.push_back(h);
-                    heap.push(h.score,hypostack.size());
-                }
-            }
-        }
-	}
-	return qq; // final position
 }
 
 // accesses hypostack

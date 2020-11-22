@@ -163,4 +163,91 @@ GF4word make_sense(const std::string& left_primer,const GF4word& codeword) {
 	return (rscore <= lscore) ? rcodeword : codeword;
 }
 
+std::uint8_t char2i(char c) {
+    switch(c) {
+        case 'a':
+        case 'A':
+            return 0;
+        case 'c':
+        case 'C':
+            return 1;
+        case 'g':
+        case 'G':
+            return 2;
+        case 't':
+        case 'T':
+            return 3;
+        default:
+            // should we map to zero or do something else?
+            return 4;
+    }
+}
+
 // class responsible for performing encoding
+class encoder {
+    GF4word leftprimer, rightprimer;
+    std::vector<Ullong> primersalt;
+    std::vector<std::uint8_t> pattarr;
+    size_t maxL;
+    double reward;
+    constexpr double rewards[] = {-0.035,-0.082,-0.127,-0.229,-0.265,-0.324};
+    
+public:
+    encoder() = delete;
+    encoder(
+        std::string& lprimer,std::string& rprimer,
+        size_t maxLen = 2500,int pattern = 0
+    ) : maxL(maxLen) {
+        set_primers(lprimer,rprimer);
+        set_coderate(pattern);
+    }
+
+    void set_coderate(int pattern) {
+        reward = rewards[pattern];
+        std::vector<std::uint8_t> pvec;
+        if (pattern == 1) {      // rate 0.75
+            pvec = {2,1};
+        }
+        else if (pattern == 2) { // rate 0.6
+            pvec = {2,1,1,1,1};
+        }
+        else if (pattern == 3) { // rate 0.5
+            pvec = {1};
+        }
+        else if (pattern == 4) { // rate 0.333
+            pvec = {1,1,0};
+        }
+        else if (pattern == 5) { // rate 0.25
+            pvec = {1,0};
+        }
+        else if (pattern == 6) { // rate 0.166
+            pvec = {1,0,0};
+        }
+        pattarr.assign(maxL + 2, 1);
+        const auto n_pattern{pattern.size()}, LPRIMER{leftprimer.size()};
+        std::fill(std::begin(pattarr),std::begin(pattarr) + LPRIMER,0);
+        for (unsigned int i = LPRIMER; i < maxL; i++) {
+            pattarr[i] = pattern[i % n_pattern];s
+        }
+    }
+    
+    void set_primers(const std::string& leftp,const std::string& rightp) {
+        const auto nL{leftp.size()}, nR{rightp.size()};
+        leftprimer.reserve(nL);
+        rightprimer.reserve(nR);
+        primersalt.assign(nL,0);
+        for(const auto e: leftp)  leftprimer.push_back(char2i(e));
+        for(const auto e: rightp) rightprimer.push_back(char2i(e));
+        constexpr int num_try{100};
+        for (size_t k = 0; k < nL; k++) {
+            auto match = leftprimer[k];
+            for (size_t i = 0; i < num_try; i++) { // try up to 100 times (what??)
+                auto regout = digest(0ULL, k, i, 4);
+                if (regout == match) {
+                    primersalt[k] = i;
+                    break;
+                }
+            }
+	    }
+    }
+};
