@@ -34,15 +34,12 @@ constexpr static bool _CHECKBOUNDS_{true};
 #include <string>
 #include <cctype>
 
-// NaN: uncomment one of the following 3 methods of defining a global NaN
-// you can test by verifying that (NaN != NaN) is true
-
+// NaN: see https://en.cppreference.com/w/cpp/types/numeric_limits/quiet_NaN
 static constexpr double NaN = std::numeric_limits<double>::quiet_NaN();
+// somewhat silly method where we explicitly set the bits of the exponent:
+// unsigned int proto_nan[2]={0xffffffff, 0x7fffffff};
+// double NaN = *( double* )proto_nan;
 
-//unsigned int proto_nan[2]={0xffffffff, 0x7fffffff};
-//double NaN = *( double* )proto_nan;
-
-//double NaN = sqrt(-1.);
 
 // Python glue Part I starts here (Part II at end of file)
 
@@ -89,13 +86,12 @@ struct NRpyArgs {
 
 // explicitly construct scalars and strings from PyObjects or Python namespace
 
-int NRpyIsNumber(PyObject* ob) {
+bool NRpyIsNumber(PyObject* ob) {
     return (PyInt_Check(ob) || PyFloat_Check(ob));
 }
 
-// type int
 int NRpyInt(PyObject* ob) {
-	if (ob == Py_None) return 0; // is this a desired coercion?
+	if (ob == Py_None) return 0; // NaN is in fact 0 for integral types
 	if (NRpyIsNumber(ob)) return static_cast<int>(PyInt_AsLong(ob));
 	else NRpyException("NRpyInt argument is not a number.");
 	return 0;
@@ -105,7 +101,6 @@ int NRpyInt(char *name, char *dict = nullptr) {
 	return NRpyInt(NRpyGetByName(name,dict));
 }
 
-// type double
 double NRpyDoub(PyObject* ob) {
 	if (ob == Py_None) return NaN;
 	else if (NRpyIsNumber(ob)) return static_cast<double>(PyFloat_AsDouble(ob)); // casts ob to double
@@ -128,9 +123,9 @@ char* NRpyCharP(char *name, char *dict = nullptr) {
 
 // type encapsulated function pointer (note different syntax so that templating can work)
 template<class T>
-void NRpyCFunction(T* &fptr, PyObject* ob) {
+void NRpyCFunction(T* fptr, PyObject* ob) {
 	if (! PyCapsule_CheckExact(ob)) NRpyException("NRpyCFunction arg is not a C++ function capsule.");
-	fptr = (T*)PyCapsule_GetPointer(ob,nullptr);
+	fptr = static_cast<T*>(PyCapsule_GetPointer(ob,nullptr));
 	return;
 }
 
@@ -146,9 +141,10 @@ struct NRpyList {
 		}
 		if (! PyList_Check(p)) NRpyException("NRpyList not successfully created.");
 	}
+    // we don't enforce that pp is actually a *list* as opposed to any other PyObject?
 	NRpyList(PyObject *pp) : p(pp), isnew(false) {
 		if (p == nullptr) p = Py_None;
-		n = int((PyList_Check(p) ? PyList_Size(p) : 0));
+		n = PyList_Check(p) ? PyList_Size(p) : 0;
 	}
 	int size() const noexcept { return n; }
 	template <class T> 
@@ -156,14 +152,18 @@ struct NRpyList {
 		int flag = PyList_SetItem(p, i, NRpyObject(val));
 		return flag;
 	}
+    // Python list can be accessed via negative index
 	NRpyList operator[](int i) {
-		if (i >= n || i < 0) NRpyException("NRpyList subscript out of range.");
+		if (i >= n || i < -n) NRpyException("NRpyList subscript out of range.");
+        if (i < 0) i = n - i;
 		return NRpyList(PyList_GetItem(p,i));
 		// Returns a borrowed (unprotected) ref, but assumes List is bound by calling routine.
 	}
 };
 
-int NRpyInt(NRpyList& list) { // cast list to integer value of its 1st element
+// cast list to integer value of its 1st element
+// what's the purpose of this?
+int NRpyInt(NRpyList& list) {
 	return NRpyInt(PyList_GetItem(list.p,0)); 
 }
 // ToDo: also make NRpyList constructors for NRvector and NRmatrix
@@ -260,15 +260,15 @@ template <> char* NRpyCast<char*>(PyObject *a) {return NRpyCharP(a);}
 
 // macro-like inline functions
 
-template<class T>
-T SQR(const T a) {return a*a;}
+// template<class T>
+// T SQR(const T a) {return a*a;}
 
 // this is NOT the usual sign function...
 // needs cleanup so that comparing e.g. <int,float> does the right thing
-template<class T,class U>
-T SIGN(const T a, const U b) {
-    return b >= 0 ? (a >= 0 ? a : -a) : (a >= 0 ? -a : a);
-}
+// template<class T,class U>
+// T SIGN(const T a, const U b) {
+//     return b >= 0 ? (a >= 0 ? a : -a) : (a >= 0 ? -a : a);
+// }
 
 // exception handling
 

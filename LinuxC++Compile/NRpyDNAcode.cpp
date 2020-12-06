@@ -82,31 +82,15 @@ double finalscore;
 // constexpr GF4reg acgtacgt{0x1b1b1b1b1b1b1b1bllu}; // "ACGTACGTACGTACGT" used for initialization
 
 // TODO: turn digest into a simple class templated by NPREV, NSEQBITS, HSALT
-static Ranhash ranhash;
+// static Ranhash ranhash;
 
-// note that the randomness is used opaquely here - the random seed passed to the RNG
-// is precisely where the sequence-specific info gets baked in. So we need to verify what's going on
-// inside ranhash.int64 and how it gets decoded later
-// template<size_t nprev,size_t seqbits,size_t hsalt>
-// class Digest {
-//     std::mt19937 rng;
-//     std::uniform_int_distribution<std::uint64_t> runif;
-//     public:
-//     Digest() rng(std::random_device{}), runif(0) {}
-//     std::int32_t operator()(Ullong bits, std::int32_t seq, Ullong salt, std::int32_t mod) const noexcept {
-//         constexpr static Ullong seqnomask{(1LLU << NSEQBITS) - 1};
-//         const auto masked_seq = static_cast<Ullong>(seq) & seqnomask) << NPREV;
-//         const auto res = ranhash.int64(((masked_seq | bits) << HSALT) | salt) % mod;
-// 	    return static_cast<std::int32_t>(res);
-//     }
+
+// std::int32_t digest(Ullong bits, std::int32_t seq, Ullong salt, std::int32_t mod) {
+//     constexpr static Ullong seqnomask{(1LLU << GP::NSEQBITS) - 1};
+//     const auto masked_seq = (static_cast<Ullong>(seq) & seqnomask) << GP::NPREV;
+//     const auto res = ranhash.int64(((masked_seq | bits) << GP::HSALT) | salt) % mod;
+// 	return res;
 // }
-
-std::int32_t digest(Ullong bits, std::int32_t seq, Ullong salt, std::int32_t mod) {
-    constexpr static Ullong seqnomask{(1LLU << GP::NSEQBITS) - 1};
-    const auto masked_seq = (static_cast<Ullong>(seq) & seqnomask) << GP::NPREV;
-    const auto res = ranhash.int64(((masked_seq | bits) << GP::HSALT) | salt) % mod;
-	return res;
-}
 
 // side effects: sets values of leftprimer, rightprimer, and primersalt
 void findprimersalt(const char* leftpr, const char* rightpr) { // set salt to match a leftprimer
@@ -135,6 +119,7 @@ void findprimersalt(const char* leftpr, const char* rightpr) { // set salt to ma
 
 // TODO: reparameterize (pass in patarr)
 // global: accesses pattarr, GP::MAXSEQ
+// nmb - number of message bits?
 std::int32_t vbitlen(std::int32_t nmb) {  // how long is message in vbits?  (patarr must already be set)
 	std::int32_t ksize{0}, nn{0};
     while( ksize++ ) {  // how many Mbits do we need?
@@ -261,16 +246,16 @@ static PyObject* minstrandlen(PyObject *self, PyObject *pyargs) {
 // given the 'seed' value, create a hashed value
 // TODO: use std::hash
 // is there a point of exporting this?
-static PyObject* hashint(PyObject *self, PyObject *pyargs) {
-	NRpyArgs args(pyargs);
-	if (args.size() != 1) {
-		NRpyException("hashint takes exactly 1 argument");
-		return NRpyObject(std::int32_t(1));
-	}
-	auto nn = NRpyInt(args[0]);
-	auto hash = ranhash.int32(Ullong(nn));
-	return NRpyObject(hash);
-}
+// static PyObject* hashint(PyObject *self, PyObject *pyargs) {
+// 	NRpyArgs args(pyargs);
+// 	if (args.size() != 1) {
+// 		NRpyException("hashint takes exactly 1 argument");
+// 		return NRpyObject(std::int32_t(1));
+// 	}
+// 	auto nn = NRpyInt(args[0]);
+// 	auto hash = ranhash.int32(Ullong(nn));
+// 	return NRpyObject(hash);
+// }
 
 // side effect: populates pattarr, sets GP::reward
 // globals: accesses leftprimer, GP::NSALT, GP::MAXSEQ

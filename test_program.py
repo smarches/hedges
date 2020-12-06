@@ -14,7 +14,7 @@ import numpy as np
 import NRpyDNAcode as code
 import NRpyRS as RS
 
-#print help(code) # uncomment to see NRpyDNAcode help output
+#print(help(code)) # uncomment to see NRpyDNAcode help output
 
 coderates = np.array([np.NaN, 0.75, 0.6, 0.5, 1./3., 0.25, 1./6.]) # table of coderates 1..6
 
@@ -27,16 +27,18 @@ strandrunoutbytes = 2 # confirming bytes end of each strand (see paper)
 hlimit = 1000000 # maximum size of decode heap, see paper
 leftprimer = "TCGAAGTCAGCGTGTATTGTATG"
 rightprimer = "TAGTGAGTGCGATTAAGCGTGTT" # for direct right appending (no revcomp)
+code.setcoderate(coderatecode,leftprimer,rightprimer) # set code rate with left and right primers
 
 # this test generates substitution, deletion, and insertion errors
 # sub,del,ins rates to simulate (as multiple of our observed values):
-(srate,drate,irate) = 1.5 * np.array([0.0238, 0.0082, 0.0039])
+srate,drate,irate = 1.5 * np.array([0.0238, 0.0082, 0.0039])
 
 # set parameters for DNA constrants (normally not changed, except for no constraint)
 max_hpoly_run = 4 # max homopolymer length allowed (0 for no constraint)
 GC_window = 12 # window for GC count (0 for no constraint)
 max_GC = 8 # max GC allowed in window (0 for no constraint)
 min_GC = GC_window - max_GC
+code.setdnaconstraints(GC_window, max_GC, min_GC, max_hpoly_run) # set DNA constraints (see paper)
 
 # not normally user settable because assumed by Reed-Solomon outer code:
 strandsperpacket = 255  # for RS(255,32)
@@ -49,28 +51,27 @@ strandlen = totstrandlen - leftlen - rightlen
 strandsperpacketmessage = strandsperpacket - strandsperpacketcheck
 NSALT, MAXSEQ, NSTAK, HLIMIT = code.getparams() # get settable code parameters
 code.setparams(8*strandIDbytes, MAXSEQ, NSTAK, hlimit) # change NSALT and HLIMIT
-bytesperstrand = int(strandlen*coderates[coderatecode]/4.)    
+
+bytesperstrand = int(strandlen * coderates[coderatecode]/4)    
 messbytesperstrand = bytesperstrand - strandIDbytes - strandrunoutbytes # payload bytes per strand
 messbytesperpacket = strandsperpacket * messbytesperstrand # payload bytes per packet of 255 strands
-code.setcoderate(coderatecode,leftprimer,rightprimer) # set code rate with left and right primers
-code.setdnaconstraints(GC_window, max_GC, min_GC, max_hpoly_run) # set DNA constraints (see paper)
+
 
 # define a source of plaintext bytes, either random or The Wizard of Oz in Esperanto
 UseWiz = True
-if UseWiz :
+if UseWiz:
     wizoffset = 0
     wizfile = "WizardOfOzInEsperanto.txt"
     with open(wizfile, 'r') as myfile: wiztext = myfile.read()
     wizbytes = np.array([c for c in wiztext]).view(np.uint8)
     wizlen = len(wizbytes)
-    def getwiz(n) : # return next n chars from wiztext
-        global wizoffset, wizlen
+    def getwiz(n): # return next n chars from wiztext
         if wizoffset + n > wizlen : wizoffset = 0
         wbytes = wizbytes[wizoffset:wizoffset+n]
         wizoffset += n
         return wbytes
 else :
-    def getwiz(n) :
+    def getwiz(n):
         return np.random.randint(0,high=256,size=n,dtype=np.uint8)
 
 #print("test source of plaintext: (below should be same Esperanto text twice - weird characters OK)")
@@ -79,7 +80,7 @@ else :
 #print("".join([chr(x) for x in getwiz(148)]))
 
 # functions to create sequential packets from the plaintext source, and R-S protect them
-def createmesspacket(packno) : # packno in range 0..255 with value 2 for strandIDbytes
+def createmesspacket(packno): # packno in range 0..255 with value 2 for strandIDbytes
     packet = np.zeros([strandsperpacket,bytesperstrand],dtype=np.uint8)
     plaintext = np.zeros(strandsperpacketmessage*messbytesperstrand,dtype=np.uint8)
     for i in range(strandsperpacket) :
@@ -89,16 +90,16 @@ def createmesspacket(packno) : # packno in range 0..255 with value 2 for strandI
             ptext = getwiz(messbytesperstrand)
             packet[i,strandIDbytes:strandIDbytes+messbytesperstrand] = ptext
             plaintext[i*messbytesperstrand:(i+1)*messbytesperstrand] = ptext
-    return (packet,plaintext)
+    return packet, plaintext
 
-def protectmesspacket(packetin) : # fills in the RS check strands
+def protectmesspacket(packetin): # fills in the RS check strands
     packet = packetin.copy()
     regin = np.zeros(strandsperpacket,dtype=np.uint8)
-    for j in range(messbytesperstrand) :
-        for i in range(strandsperpacket) :
+    for j in range(messbytesperstrand):
+        for i in range(strandsperpacket):
             regin[i] = packet[i,((j+i)% messbytesperstrand)+strandIDbytes]
         regout = RS.rsencode(regin)
-        for i in range(strandsperpacket) :
+        for i in range(strandsperpacket):
             packet[i,((j+i) % messbytesperstrand) + strandIDbytes] = regout[i]
     return packet
 
@@ -112,7 +113,7 @@ def messtodna(mpacket) :
         if len(dna) < totstrandlen : # need filler after message and before right primer
             dnaleft = dna[:-rightlen]
             dnaright = dna[-rightlen:]
-            dna = np.concatenate((dnaleft,filler[:totstrandlen-len(dna)],dnaright))
+            dna = np.concatenate([dnaleft,filler[:totstrandlen-len(dna)],dnaright])
             #n.b. this can violate the output constraints (very slightly at end of strand)
         dpacket[i,:len(dna)] = dna
     return dpacket
@@ -215,5 +216,5 @@ if __name__ == '__main__':
             tot_detect,max_detect, tot_uncorrect,max_uncorrect,toterrcodes,badbytes)),
         print(f"packet {'NOT ok' if badbytes else 'OK'}.")
         if badbytes : badpackets += 1
-    print("all packets OK" if not badpackets else "some packets had errors!")
+    print("All packets OK" if not badpackets else f"{badpackets} packets had errors!")
     print("TOT: (%4d %4d %4d %4d) (%4d %4d %4d %4d)" % tuple(Totalbads))

@@ -8,18 +8,28 @@
 template<class T, class U>
 class HeapScheduler {
     using TU = std::pair<T,U>;
-public:
-	constexpr size_t default_size{1'100'000}; // initial heap size (why?)
-    constexpr T bigval{std::numeric_limits<T>::max()};
+    private:
+	static constexpr size_t default_size{1'100'000}; // initial heap size (why?)
+    static constexpr T bigval{std::numeric_limits<T>::max()};
 	std::vector<TU> elems; // each item's timestamp is the sorting criterion so it can be processed LIFO?
 
+    public:
 	HeapScheduler() {
-        // TODO: concept
-        static_assert<std::is_arithmetic_v<T>>;
-        TU.reserve(default_size);
+        // TODO: concept. Without the silly 'bigval' behavior we can have any type implementing operator<
+        static_assert(std::is_arithmetic_v<T>);
+        elems.reserve(default_size);
+    }
+    HeapScheduler(size_t n) {
+        static_assert(std::is_arithmetic_v<T>);
+        elems.reserve(n);
+    }
+    size_t size() const {
+        return elems.size();
+    }
+    size_t capacity() const {
+        return elems.capacity();
     }
 	void push(T time, U cargo = U{}) { 
-	    // pushes a time and cargo onto the heap
         elems.push_back(std::make_pair(time,cargo));
         std::push_heap(std::begin(elems),std::end(elems),[](TU& A,TU& B){
             return A.first < B.first;
@@ -30,17 +40,20 @@ public:
 	// returns bigval time, and U() cargo, when heap is empty
         if (!elems.empty()) {
             std::pop_heap(std::begin(elems),std::end(elems));
-            return elems.pop_back();
+            auto ans = elems.back();
+            elems.pop_back();
+            return ans;
         } else {
-            // this is an 'error code'
+            // this is an 'error code'. May want to just 'forward' the std::vector 
+            // undefined behavior when pop_back is called on empty container?
             return std::make_pair(bigval,U{});
         }
 	}
-	void rewind() { // zero out the heap w/o changing its size in memory
-		elems.assign(default_size, std::pair(bigval,U{}));
+	void rewind(size_t n = default_size) { // """zero out""" the heap
+		elems.assign(n, std::pair(bigval,U{}));
         elems.shrink_to_fit();
 	}
-	void reinit() { // zero out the heap and give back memory
+	void clear() { // zero out the heap and give back memory
 		elems.clear();
 	}
 

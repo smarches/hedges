@@ -83,7 +83,7 @@ struct Ranhash {
 		return  v;
 	}
 	std::uint32_t int32(Ullong u)
-		{ return (std::uint32_t)(int64(u) & 0xffffffff) ; }
+		{ return int64(u) & 0xffffffff; }
 	double doub(Ullong u)
 		{ return magic_float2 * int64(u); }
 };
