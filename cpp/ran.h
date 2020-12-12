@@ -7,6 +7,7 @@
 static constexpr double magic_float{2.32830643653869629E-10};
 static constexpr double magic_float2{5.42101086242752217E-20};
 static constexpr std::uint64_t magic_ull{4101842887655102017LL};
+using Ullong = unsigned long long;
 
 struct Ran {
 	Ullong u,v,w;

@@ -2,6 +2,7 @@
 #include "dna_funcs.h"
 
 // not being used, but might someday!
+// see https://stackoverflow.com/questions/9949935/calculate-number-of-bits-set-in-byte#25808559
 int bytepopcount(Uchar byte) noexcept {
   static constexpr Uchar NIBBLE_LOOKUP[16] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4};
   return NIBBLE_LOOKUP[byte & 0x0F] + NIBBLE_LOOKUP[byte >> 4];

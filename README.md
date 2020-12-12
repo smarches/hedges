@@ -14,13 +14,13 @@ The following instructions should work across platforms, except that installing 
 
 First, clone the repository to a local directory:
 
-```
+```bash
 git clone https://github.com/whpress/hedges.git
 ```
 
 Optionally, you can install into a virtual environment (recommended):
 
-```
+```bash
 sudo apt-get install -y virtualenv
 cd hedges
 virtualenv envhedges
@@ -29,24 +29,35 @@ virtualenv envhedges
 
 Now install required packages:
 
-```
+```bash
 pip install numpy==1.13.3 && pip install -r requirements.txt && python setup.py install
 ```
 
+Help is available from within the installed module:
+
+```python
+# import the HEDGES modules and print their help strings
+import NRpyDNAcode as code
+import NRpyRS as RS
+help(code)
+help(RS)
+```
+
 ### What is supplied
+
 Supplied is not a single program, but a kit for variable user applications.  The kit consists of
 
 1. C++ source code that compiles (in Linux or Windows) to the Python-includable module `NRpyDNAcode`.  Precompiled binaries are supplied for Python 2.7 in Linux and Windows, but recompilation may be necessary if these don't work.  This module implements the HEDGES "inner code" as described in the paper.
 
-2.  C++ source code that compiles (in Linux or Windows) to the Python-includable module `NRpyRS`.  Precompiled binaries are supplied for Python 2.7 in Linux and Windows, but recompilation may be necessary if these don't work.  This module implements the Schifra Reed-Solomon Error Correcting Code Library.  See http://www.schifra.com  for details and license restrictions.  This module is not needed for the HEDGES inner code, but is needed only to implement the "outer code" as described in the paper.  Some users will instead want to utilize their own outer codes.
- 
-3.  Python program `print_module_test_files.py`, which verifies that the above modules can be loaded and prints their usage.  Most users will not need to use any of the routines in these files directly, but should instead use the Python functions in the following file:
- 
-4. Python program `test_program.py` .  This defines various user-level functions for implementing the HEDGES inner and Reed-Solomon outer codes as described in the paper.  The example inputs arbitrary bytes from the file `WizardOfOzInEsperanto.txt`, encodes a specified number of packets (each with 255 DNA strands), corrupts the strands with a specified level of random substitutions, insertions, and deletions, decodes the strands, and verifies the error correction.  To better validate the installation, the code rate and corruption level set by default are chosen to be stressful to HEDGES and is greater than that in an intended use case. 
+2. C++ source code that compiles (in Linux or Windows) to the Python-includable module `NRpyRS`.  Precompiled binaries are supplied for Python 2.7 in Linux and Windows, but recompilation may be necessary if these don't work.  This module implements the Schifra Reed-Solomon Error Correcting Code Library.  See [http://www.schifra.com](http://www.schifra.com)  for details and license restrictions.  This module is not needed for the HEDGES inner code, but is needed only to implement the "outer code" as described in the paper.  Some users will instead want to utilize their own outer codes.
+
+3. Python program `print_module_test_files.py`, which verifies that the above modules can be loaded and prints their usage.  Most users will not need to use any of the routines in these files directly, but should instead use the Python functions in the following file:
+
+4. Python program `test_program.py` .  This defines various user-level functions for implementing the HEDGES inner and Reed-Solomon outer codes as described in the paper.  The example inputs arbitrary bytes from the file `WizardOfOzInEsperanto.txt`, encodes a specified number of packets (each with 255 DNA strands), corrupts the strands with a specified level of random substitutions, insertions, and deletions, decodes the strands, and verifies the error correction.  To better validate the installation, the code rate and corruption level set by default are chosen to be stressful to HEDGES and is greater than that in an intended use case.
 
 ### Testing and familiarization
 
-Run the program `test_program.py` .  It should produce output comparable (but not identical) to the files `sample_linux_test_output.txt` and `sample_windows_test_output.txt`.  The output will not be identical, because different random numbers are used to create DNA errors in each run.
+Run the program `test_program.py`.  It should produce output comparable (but not identical) to the files `sample_linux_test_output.txt` and `sample_windows_test_output.txt`.  The output will not be identical, because different random numbers are used to create DNA errors in each run.
 
 If the above works, then try varying some of the parameters.  In particular, you can change `coderatecode` to increase or decrease the code rate, the values `(srate,drate,irate)` to change the fraction of substitutions, deletions, and insertions generated for the test, and `totstrandlen`, the total strand length of the DNA (including left and right primers).  The many other parameters are either self-explanatory, or else described in the paper.  Most users will not initially need to change them.
 
