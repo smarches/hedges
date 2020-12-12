@@ -50,7 +50,7 @@ class digester {
 		v ^= v << 20; v ^= v >> 41; v ^= v << 5;
 		return v;
 	}
-    public:    
+    public:
     std::int32_t digest(Ullong bits, std::int32_t seq, Ullong salt, std::int32_t mod) {
         // get first 'seqbits' bits of seq and shift left by nprev
         const auto masked_seq = (static_cast<Ullong>(seq) & seqnomask) << NPREV;
