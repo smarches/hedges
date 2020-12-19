@@ -44,7 +44,7 @@ namespace schifra
       {
       public:
 
-         typedef traits::reed_solomon_triat<code_length, fec_length,data_length> trait;
+         typedef traits::reed_solomon_trait<code_length, fec_length,data_length> trait;
          typedef block<code_length, fec_length> block_type;
 
          encoder(const galois::field& gfield, const galois::field_polynomial& generator)
@@ -135,7 +135,7 @@ namespace schifra
       {
       public:
 
-         typedef traits::reed_solomon_triat<code_length,fec_length,data_length> trait;
+         typedef traits::reed_solomon_trait<code_length,fec_length,data_length> trait;
          typedef block<code_length,fec_length> block_type;
          typedef block<natural_length,fec_length> short_block_t;
 

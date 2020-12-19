@@ -1,7 +1,9 @@
 #include <cstddef>
-#include <iostream>
 #include <string>
+#include <memory>
+#include <iostream>
 #include <vector>
+#include <array>
 
 #include "schifra/schifra_galois_field.hpp"
 #include "schifra/schifra_galois_field_polynomial.hpp"
@@ -34,129 +36,150 @@ union b8 {
 using namespace schifra;
 
 template<size_t code_length, size_t fec_length>
-struct SchifraCode { // see Schifra's example08
-
+class SchifraCode { // see Schifra's example08
+    // see schifra_galois_field.hpp
+    static_assert(code_length > fec_length);
 	static constexpr size_t data_length = code_length - fec_length;
 	static constexpr size_t generator_polynomial_root_count = fec_length;
-	static constexpr size_t field_descriptor = 8;
+	static constexpr int field_descriptor = 8;
 	static constexpr size_t generator_polynomial_index = 120;
-    static constexpr size_t pp6size{9}; // see schifra_galois_field.hpp
-    static constexpr unsigned pp6[] = { 1, 1, 1, 0, 0, 0, 0, 1, 1 };
+    static constexpr auto pad8 = std::min(8ul,data_length);
+    static constexpr std::array<unsigned,9> pp6{ 1, 1, 1, 0, 0, 0, 0, 1, 1 };
 
 	using encoder_t = reed_solomon::shortened_encoder<code_length, fec_length, data_length>;
 	using decoder_t = reed_solomon::shortened_decoder<code_length, fec_length, data_length>;
-	using field_t = const galois::field;
+	using field_t = galois::field;
 	using field_polynomial_t = galois::field_polynomial;
 	using block_t = reed_solomon::block<code_length, fec_length>;
 
-	encoder_t* encoder;
-	decoder_t* decoder;
-	field_t* field;
-	field_polynomial_t* generator_polynomial;
-	block_t block;
+    // for some reason the default constructors in Schifra are
+    // private so we need to declare pointers to the things that will be
+    // initialized, and all the subsequent code is poisoned
+    field_t *field;
+	encoder_t *encoder;
+	decoder_t *decoder;
+	field_polynomial_t *generator_polynomial;
+	block_t *block; // size of block-> data is template parameter block_length
+    // return value info of decode()
+    template<typename T>
+    struct rv {
+		int err_number, errs_detected, errs_corrected;
+        bool recoverable;
+		T message;
+        rv() = delete;
+        rv(block_t* b) : err_number(b->error),
+            errs_detected(b->errors_detected),
+		    errs_corrected(b->errors_corrected),
+		    recoverable(!b->unrecoverable) {}
+    };
+    
+    void _encode(std::string& data) {
+        auto res = encoder->encode(data, *block);
+        if (!res) {
+            std::cerr << "Error - Critical encoding failure!\nMsg: " << block->error_as_string() << '\n';
+            exit(EXIT_FAILURE);
+        }
+    }
 
+public:
 
 	SchifraCode() {
-		/* Instantiate Finite Field, Generator Polynomials, Encoder, Decoder */
-		field = new field_t(field_descriptor, pp6size, pp6);
+        /* Instantiate Finite Field, Generator Polynomials, Encoder, Decoder */
+        // field = new field_t(field_descriptor,pp6.size(), pp6.data());
+        field = new field_t(field_descriptor,pp6.size(), pp6.data());
 		generator_polynomial = new field_polynomial_t(*field);
-		if (!make_sequential_root_generator_polynomial(
-                *field,
-			    generator_polynomial_index,
-			    generator_polynomial_root_count,
-			    *generator_polynomial
-            )
-			) {
-			throw("Error - Failed to create sequential root generator!");
-		}
+        auto res = make_sequential_root_generator_polynomial(
+            *field,
+            generator_polynomial_index,
+            generator_polynomial_root_count,
+            *generator_polynomial
+        );
+		if ( !res ) { throw("Error - Failed to create sequential root generator!"); }
 		encoder = new encoder_t(*field, *generator_polynomial);
 		decoder = new decoder_t(*field, generator_polynomial_index);
 	}
-	VecUchar encode(VecUchar& mess) {
+
+    ~SchifraCode() {
+        delete field;
+        delete generator_polynomial;
+        delete encoder;
+        delete decoder;
+    }
+
+	VecUchar encode(VecUchar& msg) {
 		std::string message(code_length, 0);
-		for (int i = 0; i < data_length; i++) message[i] = mess[i];
-		if (!encoder->encode(message, block)) {
-			std::cout << "Error - Critical encoding failure! "
-				<< "Msg: " << block.error_as_string() << std::endl;
-			exit(EXIT_FAILURE);
-		}
+        std::size_t L = std::min(msg.size(),data_length);
+		for (size_t i = 0; i < L; i++) message[i] = msg[i];
+        _encode(message);
 		VecUchar codeword(code_length);
-		for (int i = 0; i < code_length; i++) codeword[i] = static_cast<Uchar>(block.data[i]);
+		for (int i = 0; i < code_length; i++) codeword[i] = static_cast<Uchar>(block->data[i]);
 		return codeword;
 	}
-	b8 encode(b8 mess) {
-        // 'mess.b' is exactly 8 bytes
-		std::string message(8, 0);
-		for (int i = 0; i < 8; i++) message[i] = mess.b[i];
-		if (!encoder->encode(message, block)) {
-			std::cout << "Error - Critical encoding failure! "
-				<< "Msg: " << block.error_as_string() << '\n';
-			exit(EXIT_FAILURE);
-		}
-		b8 codeword;
-		for (int i = 0; i < 8; i++) codeword.b[i] = static_cast<Uchar>(block.data[i]);
+	b8 encode(b8 msg) {
+		std::string message(data_length,0);
+        // 'msg.b' is exactly 8 bytes
+		for (unsigned i = 0; i < 8; i++) message.push_back(msg.b[i]);
+        // the encode_t.encode() method blindly copies the input message up to its data_length
+        // template parameter regardless of whether the message is actually that long
+		b8 codeword(0);
+		for (size_t i = 0; i < pad8; i++) codeword.b[i] = static_cast<Uchar>(block->data[i]);
 		return codeword;
 	}
-	VecUchar decode(VecUchar& codeword, int& errs_detected, int& errs_corrected,
-		int& err_number, bool& recoverable) {
-		block.reset(); // not needed?
-		for (int i = 0; i < code_length; i++) {
-            block.data[i] = static_cast<galois::field_symbol>(codeword[i]);
+    
+	rv<VecUchar> decode(VecUchar& codeword) {
+        if(codeword.size() != code_length) {
+            throw("cannot decode this!");
         }
-		decoder->decode(block);
-		err_number = block.error;
-		VecUchar message(code_length);
-		for (int i = 0; i < code_length; i++) message[i] = static_cast<Uchar>(block.data[i]);
-		errs_detected = block.errors_detected;
-		errs_corrected = block.errors_corrected;
-		recoverable = !block.unrecoverable;
-		return message;
-	}
-	VecUchar decode(const VecUchar& codeword,const std::vector<size_t>& erasures, 
-        int &errs_detected, int &errs_corrected,
-		int &err_number, bool &recoverable) {
-		block.reset(); // not needed?
+		block->reset(); // not needed?
 		for (int i = 0; i < code_length; i++) {
-            block.data[i] = static_cast<galois::field_symbol>(codeword[i]);
+            block->data[i] = static_cast<galois::field_symbol>(codeword[i]);
+        }
+		decoder.decode(block);
+		VecUchar message(code_length);
+		for (int i = 0; i < code_length; i++) message[i] = static_cast<Uchar>(block->data[i]);
+        rv<VecUchar> ret(block);
+        ret.message(std::move(message));
+		return ret;
+	}
+	rv<VecUchar> decode(const VecUchar& codeword,const std::vector<size_t>& erasures) {
+        if(codeword.size() != code_length) {
+            throw("cannot decode this!");
+        }
+		block->reset(); // not needed?
+		for (int i = 0; i < code_length; i++) {
+            block->data[i] = static_cast<galois::field_symbol>(codeword[i]);
         }
 		decoder->decode(block,erasures);
-		err_number = block.error;
-		VecUchar message(code_length);
-		for (int i = 0; i < code_length; i++) message[i] = static_cast<Uchar>(block.data[i]);
-		errs_detected = int(block.errors_detected);
-		errs_corrected = int(block.errors_corrected);
-		recoverable = !block.unrecoverable;
-		return message;
+		rv<VecUchar> ret(block);
+        VecUchar message(code_length);
+		for (int i = 0; i < code_length; i++) message[i] = static_cast<Uchar>(block->data[i]);
+        ret.message(std::move(message));
+		return ret;
 	}
-	b8 decode(b8 codeword, int &errs_detected, int &errs_corrected,
-		int &err_number, bool &recoverable) {
-		block.reset(); // not needed?
-		for (int i = 0; i < code_length; i++) {
-            block.data[i] = static_cast<galois::field_symbol>(codeword.b[i]);
+	auto decode(b8 codeword) {
+		block->reset(); // not needed?
+		for (size_t i = 0; i < code_length; i++) {
+            block->data[i] = static_cast<galois::field_symbol>(codeword.b[i]);
         }
-		decoder->decode(block);
-		err_number = block.error;
-		b8 message;
-		for (int i = 0; i < code_length; i++) message.b[i] = static_cast<Uchar>(block.data[i]);
-		errs_detected = int(block.errors_detected);
-		errs_corrected = int(block.errors_corrected);
-		recoverable = !block.unrecoverable;
-		return message;
+		decoder->decode(*block);
+        std::cout << "actual decode finished\n";
+		b8 message(*(unsigned long long *)(block->data));
+        std::cout << "b8 message is: " << message.w << '\n';
+        rv<b8> ret(block);
+        ret.message = message;
+		return ret;
 	}
-	b8 decode(const b8 codeword,const std::vector<size_t>& erasures, int& errs_detected, int& errs_corrected,
-		int& err_number, bool& recoverable) {
-		block.reset(); // not needed?
+	auto decode(const b8 codeword,const std::vector<size_t>& erasures) {
+		block->reset(); // not needed?
 		for (int i = 0; i < code_length; i++){
-            block.data[i] = static_cast<galois::field_symbol>(codeword.b[i]);
+            block->data[i] = static_cast<galois::field_symbol>(codeword.b[i]);
         }
-		decoder->decode(block,erasures);
-		err_number = block.error;
-		b8 message;
-		for (int i = 0; i < code_length; i++) message.b[i] = static_cast<Uchar>(block.data[i]);
-		errs_detected = int(block.errors_detected);
-		errs_corrected = int(block.errors_corrected);
-		recoverable = !block.unrecoverable;
-		return message;
+		decoder->decode(*block,erasures);
+		b8 message(*(unsigned long long *)(block->data));
+        std::cout << "b8 message is: " << message.w << '\n';
+        rv<b8> ret(block);
+        ret.message = message;
+		return ret;
 	}
 
 	/*
