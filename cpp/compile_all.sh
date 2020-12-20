@@ -2,18 +2,23 @@
 
 # -fPIC is position-independent code, mostly for obscure systems
 # -fpermissive is worrisome
+# TODO: create a makefile
 
-PY_VER="python2.7"
+PY_VER="python3.7"
 PY_LOC="/usr/include/{PY_VER}"
 
-g++ -fPIC -fpermissive -w -c NRpyDNAcode.cpp -o NRpyDNAcode.o \
+warn_opts="-Wall -Werror -Wpedantic"
+cpp_ver="-std=c++17"
+
+g++ "${warn_opts}" "${cpp_ver}" -fPIC -w -c NRpyDNAcode.cpp -o NRpyDNAcode.o \
     -I"{PY_LOC}" \
     -I/usr/local/lib/"{PY_VER}"/dist-packages/numpy/core/include
 
-g++ -shared NRpyDNAcode.o -o NRpyDNAcode.so
+g++ "${warn_opts}" "${cpp_ver}" -shared NRpyDNAcode.o -o NRpyDNAcode.so
 
-g++ -fPIC -fpermissive -w -c NRpyRS.cpp -o NRpyRS.o -I"{PY_LOC}" \
+g++ "${warn_opts}" "${cpp_ver}" -fPIC -w -c NRpyRS.cpp -o NRpyRS.o -I"{PY_LOC}" \
  -I/usr/local/lib/"{PY_VER}"/dist-packages/numpy/core/include
-g++ -shared NRpyRS.o -o NRpyRS.so
+
+g++ "${warn_opts}" "${cpp_ver}" -shared NRpyRS.o -o NRpyRS.so
 
 # echo "done"

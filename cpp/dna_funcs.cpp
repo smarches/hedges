@@ -1,4 +1,5 @@
 #include <type_traits>
+#include <iostream>
 #include "dna_funcs.h"
 
 // not being used, but might someday!
@@ -61,13 +62,31 @@ GF4word revcomp(const GF4word& arr) {
 }
 
 // this could be constexpr but we'd never use it as such
-auto countgc(const Ullong prev,const Ullong mask) noexcept {
+// note, this only produces the correct answer if ALL input bits are
+// in {0,1,2,3}!
+unsigned countgc(const Ullong prev,const Ullong mask) noexcept {
         Ullong reg = prev & mask;
         // makes ones for GC, zeros for AT
         reg = (reg ^ (reg >> 1)) & 0x5555555555555555ull;
         reg -= ((reg >> 1) & 0x5555555555555555ull);
         reg = (reg & 0x3333333333333333ull) + (reg >> 2 & 0x3333333333333333ull);
         return ((reg + (reg >> 4)) & 0xf0f0f0f0f0f0f0full) * 0x101010101010101ull >> 56;
+}
+
+/* count # of G/C when the input 8 bytes are viewed as 1-byte chars,
+ * remembering that A,C,G,T are represented as 0,1,2,3 here
+ * the order that the bytes are iterated over could depend on the CPU being
+ * little endian or big endian, but fortunately order of traversal doesn't matter
+ * for this count.
+ */
+unsigned count_gc(Ullong prev,Ullong mask) noexcept {
+    Ullong prev_mask = prev & mask;
+    unsigned res = 0;
+    for(unsigned i=0; i<8;++i) {
+        Ullong imask = (prev_mask >> 8*i) & 0xff;
+        res += imask == 1 || imask == 2;
+    }
+    return res;
 }
 
 // length of return value is used as the 'mod' value in digest()

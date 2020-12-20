@@ -65,6 +65,10 @@ int bytepopcount(Uchar byte) noexcept;
 
 GF4word revcomp(const GF4word& arr);
 
+unsigned countgc(const Ullong prev,const Ullong mask) noexcept;
+
+unsigned count_gc(Ullong prev,Ullong mask) noexcept;
+
 std::string dna_errors(const std::string& s,double sub_rate,double del_rate,double ins_rate);
 
 double primerscore(const std::string& a,const std::string& b,double mispen,double gappen, double skewpen);
