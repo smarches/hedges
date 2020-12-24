@@ -76,3 +76,5 @@ double primerscore(const std::string& a,const std::string& b,double mispen,doubl
 GF4word make_sense(const std::string& left_primer,const GF4word& codeword);
 
 class encoder;
+
+class pattarr;

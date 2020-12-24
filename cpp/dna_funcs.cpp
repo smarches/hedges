@@ -217,31 +217,16 @@ GF4word make_sense(const std::string& left_primer,const GF4word& codeword) {
 	return (rscore <= lscore) ? rcodeword : codeword;
 }
 
-// class responsible for performing encoding
-class encoder {
-    GF4word leftprimer, rightprimer;
-    std::vector<Ullong> primersalt;
-    std::vector<std::uint8_t> pattarr;
-    size_t maxL, NSP;
-    double reward;
-    static constexpr double rewards[] = {-0.035,-0.082,-0.127,-0.229,-0.265,-0.324};
-    static constexpr Ullong acgtacgt{0x1b1b1b1b1b1b1b1bllu}; // "ACGTACGTACGTACGT"
-    digester<10,24,8> D;
-    
-public:
-    encoder() = delete;
-    encoder(
-        std::string& lprimer,std::string& rprimer,
-        size_t maxLen = 2500,size_t nsalt = 24,int pattern = 0
-    ) : maxL(maxLen) {
-        set_primers(lprimer,rprimer);
-        set_coderate(pattern);
-        NSP = vbitlen(nsalt) + leftprimer.size();
-    }
-
-    void set_coderate(int pattern) {
-        reward = rewards[pattern];
-        std::vector<std::uint8_t> pvec;
+// simple helper class which generates values for the different 'patterns'
+// rather than storing a (large) fixed-sized array and helplessly failing (and needing extra error cheking)
+// if the string is larger, it seems much simpler to just generate them as needed
+class pattarr {
+    size_t prsize, psum;
+    std::vector<std::uint8_t> pvec;
+    public:
+    pattarr(){}; // pure formality
+    pattarr(unsigned pattern,unsigned primer_size) : prsize(primer_size) {
+        pattern = pattern % 6 + 1; // worth throwing an error?
         if (pattern == 1) {      // rate 0.75
             pvec = {2,1};
         }
@@ -260,12 +245,46 @@ public:
         else if (pattern == 6) { // rate 0.166
             pvec = {1,0,0};
         }
-        pattarr.assign(maxL + 2, 1);
-        const auto n_pattern{pvec.size()}, LPRIMER{leftprimer.size()};
-        std::fill(std::begin(pattarr),std::begin(pattarr) + LPRIMER,0);
-        for (unsigned int i = LPRIMER; i < maxL; i++) {
-            pattarr[i] = pvec[i % n_pattern];
-        }
+        psum = std::accumulate(std::cbegin(pvec),std::cend(pvec),0);
+    }
+    unsigned operator[](size_t i) const {
+        return i < prsize ? 0 : pvec[(i - prsize) % pvec.size()];
+    }
+    unsigned vbitsum(size_t i) const {
+        if(i < prsize) return 0;
+        auto n_use = i - prsize;
+        size_t n_group = n_use / pvec.size();
+        unsigned rem = n_use % pvec.size();
+        return n_group * psum + pvec[rem];
+    }
+};
+
+// class responsible for performing encoding
+class encoder {
+    using VecUchar = std::vector<Uchar>;
+    GF4word leftprimer, rightprimer;
+    std::vector<Ullong> primersalt;
+    size_t maxL, NSP;
+    double reward;
+    static constexpr double rewards[] = {-0.035,-0.082,-0.127,-0.229,-0.265,-0.324};
+    static constexpr Ullong acgtacgt{0x1b1b1b1b1b1b1b1bllu}; // "ACGTACGTACGTACGT"
+    digester<10,24,8> D;
+    pattarr Pat;
+    
+public:
+    encoder() = delete;
+    encoder(
+        std::string& lprimer,std::string& rprimer,
+        size_t maxLen = 2500,size_t nsalt = 24,int pattern = 0
+    ) : maxL(maxLen) {
+        set_primers(lprimer,rprimer);
+        set_coderate(pattern);
+        NSP = vbitlen(nsalt) + leftprimer.size();
+    }
+
+    void set_coderate(int pattern) {
+        reward = rewards[pattern];
+        Pat = pattarr(pattern,leftprimer.size());
     }
     
     void set_primers(const std::string& leftp,const std::string& rightp) {
@@ -286,18 +305,34 @@ public:
     }
 
     size_t vbitlen(size_t num_msg_bits) const {
-        size_t ksize{0}, nn{0};
-        while( ksize++ ) {  // how many Mbits do we need?
-            if (nn >= num_msg_bits) break;
-            if (ksize >= pattarr.size()) throw "vbitlen: MAXSEQ too small";
-            nn += pattarr[ksize];
-	    }
-	    return ksize;
+        return Pat.vbitsum(num_msg_bits);
+    }
+
+    VecUchar packvbits(const VecMbit& vbits, size_t msg_bits = 0) {
+        
+        const auto ksize = vbits.size();
+        // no more than the specified number of bits if it is set
+        size_t nn = msg_bits > 0 ? msg_bits : Pat[ksize];
+        const auto n_bytes = (nn + 7) / 8; // number of bytes
+        VecUchar ans(n_bytes,0);
+        unsigned int i = 0, j = 0;
+        for (size_t k = 0; k < ksize; k++) {
+            for (auto k1 = Pat[k] - 1; k1 >= 0; k1--) {
+                Uchar bit = (vbits[k] >> k1) & 1;
+                ans[i] = ans[i] | (bit << (7-j++));
+                if (j == 8) {
+                    j = 0;
+                    if (++i == n_bytes) break; 
+                }
+            }
+            if (i == n_bytes) break;
+        }
+        return ans;
     }
 
     VecMbit unpackvbits(const std::string& message, std::uint32_t len=0) {
         const size_t n{message.size()};
-        size_t nmb{8*n}; // # of bits in the message
+        size_t nmb = 8*n; // # of bits in the message
         auto ksize = vbitlen(nmb);
         // guard against unsigned underflow
         size_t size2 = len > rightprimer.size() ? len - rightprimer.size() : 0;
@@ -306,7 +341,7 @@ public:
         VecMbit ans(ksize,0);
         size_t i = 0, j = 0;
         for (size_t k = 0; k < ksize; k++) {
-            for (int k1 = 0; k1 < pattarr[k]; k1++) {
+            for (size_t k1 = 0; k1 < Pat[k]; k1++) {
                 Uchar bit = i < n ? (message[i] >> (7 - j++)) & 1 : 0;
                 if (j == 8) { j = 0; ++i; }
                 ans[k] = (ans[k] << 1) | bit;
@@ -329,13 +364,11 @@ public:
         const Ullong dnawinmask { (1ULL << 2 * DNAWINDOW) - 1 };
         GF4word vbits = unpackvbits(message, len);
 	    const auto nm{vbits.size()}; // number of variable bits encoded
-	    if (nm > pattarr.size()) throw("encode: MAXSEQ too small");
-
         const size_t LPRIMER{leftprimer.size()};
 	    GF4word codetext(nm + rightprimer.size());
-	
 	    Ullong prevbits = 0, salt = 0, newsalt = 0; 
 	    GF4reg prevcode = acgtacgt; // initialize with no runs and balanced cg
+        
         for (size_t k = 0; k < nm; k++) { // on decoding, k is called seq
             Mbit messagebit = vbits[k];
             if (k < LPRIMER) {
@@ -358,7 +391,7 @@ public:
                 regout = (regout + messagebit) % mod;
                 codetext[k] = dnac_ok[regout];
             }
-            auto nbits = pattarr[k];
+            auto nbits = Pat[k];
             prevbits = ((prevbits << nbits) & prevmask) | messagebit; // variable number
             prevcode = ((prevcode << 2) | codetext[k]) & dnawinmask;  // shift code by 1
         }
