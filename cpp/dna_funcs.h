@@ -148,12 +148,9 @@ public:
         std::string& lprimer,std::string& rprimer,
         unsigned pattern = 1,size_t nsalt = 24
     ) {
-        std::cout << "setting primers\n";
         set_primers(lprimer,rprimer);
-        std::cout << "setting coderate\n";
         set_coderate(pattern);
         NSP = vbitlen(nsalt) + leftprimer.size();
-        std::cout << "NSP = " << NSP << '\n';
     }
 
     void set_coderate(unsigned pattern);
