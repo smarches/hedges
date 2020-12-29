@@ -52,8 +52,8 @@ std::string string_from_charvec(const GF4word& v) {
 
 // reverse complement for GF4word (aka vector of bytes)
 GF4word revcomp(const GF4word& arr) {
-	GF4word ans = arr;
-	constexpr Uchar TGCA[] = { 3,2,1,0 };
+    GF4word ans = arr;
+    constexpr Uchar TGCA[] = { 3,2,1,0 };
     std::reverse(std::begin(ans),std::end(ans));
     std::for_each(std::begin(ans),std::end(ans),[TGCA](auto& e){
         e = e > 3 ? e : TGCA[e];
@@ -166,25 +166,25 @@ std::string dna_errors(
     static std::uniform_int_distribution<> rint(0,3);
 
     size_t n = 0, nn = s.size();
-	std::vector<unsigned char> ans;
+    std::vector<unsigned char> ans;
     // reserve a sufficient capacity for most cases:
     const size_t size_guess = nn * (1 - del_rate) * (1 + ins_rate) * 1.33;
     ans.reserve(size_guess);
-	while (n < nn) {
-		if (runif(rng) < ins_rate) { // insertion
-			ans.push_back(rint(rng));
-			continue;
-		}
-		if (runif(rng) < del_rate) { // deletion
-			++n;
-			continue;
-		}
-		if (runif(rng) < sub_rate) { //substitution or errorfree
+    while (n < nn) {
+        if (runif(rng) < ins_rate) { // insertion
             ans.push_back(rint(rng));
-		} else {
-			ans.push_back(s[n++]);
-		}
-	}
+            continue;
+        }
+        if (runif(rng) < del_rate) { // deletion
+            ++n;
+            continue;
+        }
+        if (runif(rng) < sub_rate) { //substitution or errorfree
+            ans.push_back(rint(rng));
+        } else {
+            ans.push_back(s[n++]);
+        }
+    }
     return string_from_charvec(ans);
 }
 
@@ -194,31 +194,31 @@ double primerscore(
     const std::string& a, const std::string& b,
     double mispen = 1., double gappen = 1., double skewpen = 1.
     ) {
-	const size_t na{a.size()}, nb{b.size()};
-	simple_matrix<double> cost(na + 1, nb + 1);
-	cost(0,0) = 0.;
-	for (size_t i = 1; i <= na; i++) cost(i,0) = cost(i - 1,0) + skewpen;
-	for (size_t i = 1; i <= nb; i++) cost(0,i) = cost(0,i - 1) + skewpen;
-	for (size_t i = 1; i <= na; i++) {
+    const size_t na{a.size()}, nb{b.size()};
+    simple_matrix<double> cost(na + 1, nb + 1);
+    cost(0,0) = 0.;
+    for (size_t i = 1; i <= na; i++) cost(i,0) = cost(i - 1,0) + skewpen;
+    for (size_t i = 1; i <= nb; i++) cost(0,i) = cost(0,i - 1) + skewpen;
+    for (size_t i = 1; i <= na; i++) {
         for (size_t j = 1; j <= nb; j++) {
-		    double dn = cost(i - 1,j) + ((j == nb) ? skewpen : gappen);
-		    double rt = cost(i,j - 1) + ((i == na) ? skewpen : gappen);
-		    double dg = cost(i - 1,j - 1) + ((a[i - 1] == b[j - 1]) ? -1. : mispen);
-		    cost(i,j) = std::min(std::min(dn, rt), dg);
+            double dn = cost(i - 1,j) + ((j == nb) ? skewpen : gappen);
+            double rt = cost(i,j - 1) + ((i == na) ? skewpen : gappen);
+            double dg = cost(i - 1,j - 1) + ((a[i - 1] == b[j - 1]) ? -1. : mispen);
+            cost(i,j) = std::min(std::min(dn, rt), dg);
         }
-	}
-	return cost(na,nb);
+    }
+    return cost(na,nb);
 }
 
 
 // reverse complement codeword if that makes left_primer agree better
 // note the inconsistent types here: a string (ACGT) and a 0123 encoding...fix
 GF4word make_sense(const std::string& left_primer,const GF4word& codeword) {
-	auto rcodeword = revcomp(codeword);
+    auto rcodeword = revcomp(codeword);
     std::string scode{string_from_charvec(codeword)}, srcode{string_from_charvec(rcodeword)};
-	const double lscore = primerscore(left_primer, scode);
-	const double rscore = primerscore(left_primer, srcode);
-	return (rscore <= lscore) ? rcodeword : codeword;
+    const double lscore = primerscore(left_primer, scode);
+    const double rscore = primerscore(left_primer, srcode);
+    return (rscore <= lscore) ? rcodeword : codeword;
 }
 
 
@@ -250,6 +250,9 @@ void encoder::set_primers(const std::string& leftp,const std::string& rightp) {
             }
         }
     }
+    // since the pattern 'array' has a dependence on leftprimer, need
+    // to reset that, too:
+    set_coderate(_pattern);
 }
 
 size_t encoder::vbitlen(size_t num_msg_bits) const noexcept {
@@ -297,7 +300,11 @@ VecMbit encoder::unpackvbits(const std::string& message, std::uint32_t len=0) co
     }
     return ans;
 }
-    
+
+size_t encoder::strand_len(size_t bytes) const noexcept {
+    return vbitlen(8 * bytes) + rightprimer.size();
+}
+
 // encode a message!
 GF4word encoder::encode(
     std::string& message,
@@ -317,17 +324,17 @@ GF4word encoder::encode(
     GF4word codetext(nm + rightprimer.size());
     Ullong prevbits = 0, salt = 0, newsalt = 0; 
     GF4reg prevcode = acgtacgt; // initialize with no runs and balanced cg
-
+    const size_t nsp = NSP();
     for (size_t k = 0; k < nm; k++) { // on decoding, k is called seq
         Mbit messagebit = vbits[k];
         if (k < LPRIMER) {
             salt = primersalt[k];
         }
-        else if (k < NSP) {
+        else if (k < nsp) {
             salt = 0;
             newsalt = ((newsalt << 1) & saltmask) ^ messagebit;
         }
-        else if (k == NSP) {
+        else if (k == nsp) {
             salt = newsalt; // time to update the salt
         }
         if(k < LPRIMER) {
@@ -346,4 +353,49 @@ GF4word encoder::encode(
     }
     std::copy(std::cbegin(rightprimer),std::cend(rightprimer),std::begin(codetext) + nm);
     return codetext;
+}
+
+int encoder::search_heap(
+    std::vector<Uchar>& text,
+    unsigned msg_bits,
+    unsigned hlimit) {
+    
+        // given the heap, keep processing it until offset limit, hypothesis limit, or an error is reached
+    const auto seqmax = vbitlen(msg_bits);
+    const size_t limit{text.size()};
+    int qq, qqmax = -1, ofmax = -1;
+    constexpr std::array<int,3> skews{0,-1,1};
+    // GP::errcode = 0;
+    while (true) {
+        const auto res = heap.pop();
+        double currscore = res.first;
+        qq = res.second;
+        const auto hp = hypostack[qq];
+        auto seq = hp.seq;
+        
+        if (hp.offset > ofmax) { // keep track of farthest gotten to
+            ofmax = hp.offset;
+            qqmax = qq;
+        }
+        if (currscore > 1.e10) break; // heap is empty (TODO: change this)
+        if (hp.offset >= limit-1) break; // errcode 0 (nominal success)
+        if (msg_bits > 0 && seq >= seqmax-1) break; // ditto when no. of message bits specified
+        // TODO: fix error codes
+        if (hypostack.size() > hlimit) { 
+            // GP::errcode = 2;
+            return qqmax;
+        }
+
+        const int nguess = 1 << Pat[seq + 1]; // 1, 2, or 4
+        for(auto skew : skews) {
+            for (Uchar mbit = 0; mbit < nguess; mbit++) {
+                Hypothesis h();
+                if(h.init_from_predecessor(text, qq, mbit, skew)) {
+                    hypostack.push_back(h);
+                    heap.push(h.score,hypostack.size());
+                }
+            }
+        }
+    }
+    return qq; // final position
 }

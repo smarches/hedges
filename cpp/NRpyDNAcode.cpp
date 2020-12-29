@@ -293,7 +293,7 @@ void setcoderate_C(int pattnumber, const char* left_primer, const char* right_pr
 }
 
 // globals: sets GP::errcode
-// accessses heap, MAXSEQ
+// accessses heap, MAXSEQ, pattarr
 // returns 'nfinal', the # of total hypotheses considered
 // TODO: turn into method
 int shoveltheheap(const GF4word& text, int nmessbits,size_t hlimit) {
@@ -521,11 +521,9 @@ struct Hypothesis {
 		if (skew < 0) { //deletion
 			mypenalty = GP::deletion;			
 		} else {
-			bool discrep = regout == codetext[offset];  // the only place where a check is possible!
-			if (skew == 0) mypenalty = discrep ? GP::reward : GP::substitution;
-			else { // insertion
-				mypenalty = GP::insertion + (discrep ? GP::reward : GP::substitution);
-			}
+			bool ismatch = regout == codetext[offset];  // the only place where a check is possible!
+            float adj = ismatch ? GP::reward : GP::substitution;
+            mypenalty = adj + (skew == 0) * GP::insertion;
 		}
 		if (dither > 0.) mypenalty += GP::dither * (2.*ran.doub() - 1.);
 		score = hp.score + mypenalty;
