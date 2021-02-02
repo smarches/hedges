@@ -10,13 +10,12 @@
 
 using Ullong = unsigned long long;
 using Uchar = unsigned char;
-using GF4char = unsigned char; // semantically ACGT
+// using GF4char = unsigned char; // semantically ACGT
+using GF4reg = unsigned long long; // 8 bytes' worth of compressed GF4word values
+// using Mbit = unsigned char; // semantically VARIABLE NUMBER of plaintext bits
+// using VecMbit = std::vector<Mbit>;  // message bits unpacked to variable
 // may want to use string if likely that small-string optimizations or etc. would be helpful
-using GF4word = std::vector<Uchar>;  // semantically string of ACGT
-using GF4reg = unsigned long long; // semantically a compressed GF4word
-using Mbit = unsigned char; // semantically VARIABLE NUMBER of plaintext bits
-using VecInt = std::vector<int>;
-using VecMbit = std::vector<Mbit>;  // message bits unpacked to variable
+using GF4word = std::vector<Uchar>;  // string of ACGT
 using VecUchar = std::vector<Uchar>; // aka std::basic_string<unsigned char>
 
 template<class T>
@@ -44,19 +43,23 @@ class simple_matrix {
 
 // the key step in the encoding of sequential (groups of 8) bytes
 // baked-in parameters are 10, 24, 8 respectively
-// this is basically a hash function so it could be replaced with any
-// suitable hashing functionality
 template<unsigned SEQBITS,unsigned HSALT,unsigned NPREV>
 class digester {
     static constexpr Ullong seqnomask{(1LLU << SEQBITS) - 1};
+    public:
+    // this is basically a hash function so it could be replaced with any
+    // suitable hashing functionality
     Ullong int64(Ullong u) const noexcept {
         Ullong v = u * 3935559000370003845LL + 2691343689449507681LL;
-        v ^= v >> 21; v ^= v << 37; v ^= v >> 4;
+        v ^= v >> 21;
+        v ^= v << 37; 
+        v ^= v >> 4;
         v *= 4768777513237032717LL;
-        v ^= v << 20; v ^= v >> 41; v ^= v << 5;
+        v ^= v << 20; 
+        v ^= v >> 41; 
+        v ^= v << 5;
         return v;
     }
-    public:
     std::int32_t digest(
         Ullong bits, 
         std::int32_t seq, 
@@ -72,7 +75,7 @@ class digester {
     unsigned nprev()   const noexcept { return NPREV; }
 };
 
-int bytepopcount(Uchar byte) noexcept;
+unsigned int bytepopcount(Uchar byte) noexcept;
 
 GF4word revcomp(const GF4word& arr);
 
@@ -134,6 +137,7 @@ class pattarr {
     }
 };
 
+using hypovec = std::vector<Hypothesis<8,24>>;
 class encoder {
     
     double reward;
@@ -159,8 +163,8 @@ public:
     void set_primers(const std::string& leftp,const std::string& rightp);
     size_t vbitlen(size_t num_msg_bits) const noexcept;
     size_t NSP() const noexcept { return vbitlen(_nsalt) + leftprimer.size();}
-    VecUchar packvbits(const VecMbit& vbits, size_t msg_bits) const;
-    VecMbit unpackvbits(const std::string& message, std::uint32_t len) const;
+    VecUchar packvbits(const VecUchar& vbits, size_t msg_bits) const;
+    VecUchar unpackvbits(const std::string& message, std::uint32_t len) const;
     size_t strand_len(size_t bytes) const noexcept;
     GF4word encode(
         std::string& message,
@@ -171,28 +175,30 @@ public:
         const unsigned MAXRUN = 4
     ) const;
 
-    int search_heap(std::vector<Uchar>& text,unsigned msg_bits,unsigned hlimit);
+    int search_heap(hypovec& hstack,std::vector<Uchar>& text,unsigned msg_bits,unsigned hlimit);
+    std::string decode(GF4word data) const;
 };
 
 // default values are 8 and 24 resp.
 template<unsigned NPREV, unsigned HSALT>
 class Hypothesis {
-    size_t predi; // index of predecessor in hypostack
-    int offset; // next char in message
-    int seq; // my position in the decoded message (0,1,...)
-    double score; // my -logprob score before update (what update??)
-    Mbit messagebit; // last decoded up to now
-    Ullong prevbits, salt, newsalt;
-    GF4reg prevcode;
     static constexpr Ullong prevmask{(1ULL << NPREV) - 1};
     static constexpr Ullong saltmask{(1ULL << HSALT) - 1};
     static std::mt19937 rng(std::random_device{}());
     static std::uniform_real_distribution<double> runif(-1,1.);
-    
+    Ullong prevbits, salt, newsalt;
+    public:
+    size_t pred_ix, my_ix; // index of predecessor in hypostack
+    int offset; // next char in message
+    int seq; // my position in the decoded message (0,1,...)
+    double score; // my -logprob score before update (what update??)
+    Uchar messagebit; // last decoded up to now
+    GF4reg prevcode;
     // TODO: cleanup with default/delete
     Hypothesis() {
 
-        predi = 0; // the root element is its own predecessor
+        pred_ix = 0; // the root element is its own predecessor
+        my_ix = 0;
         offset = -1;
         seq = -1;
         messagebit = 0; // not really a message bit
@@ -210,15 +216,14 @@ class Hypothesis {
         const GF4reg& codetext,
         const Hypothesis& hp,
         const Encoder& E,
-        size_t pred_i, 
-        Mbit mbit, 
+        Uchar mbit, 
         int skew
     ) {
 
         const size_t LPRIMER{leftprimer.size()};
         const Ullong dnawinmask = (1ULL << 2 * GP::DNAWINDOW) - 1;
 
-        predi = pred_i;
+        pred_ix = hp.pred_ix;
         messagebit = mbit; // variable number
         seq = hp.seq + 1;  // always one longer than predecessor
         prevbits = hp.prevbits;

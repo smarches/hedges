@@ -4,9 +4,9 @@
 
 // not being used, but might someday!
 // see https://stackoverflow.com/questions/9949935/calculate-number-of-bits-set-in-byte#25808559
-int bytepopcount(Uchar byte) noexcept {
-  static constexpr Uchar NIBBLE_LOOKUP[16] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4};
-  return NIBBLE_LOOKUP[byte & 0x0F] + NIBBLE_LOOKUP[byte >> 4];
+unsigned int bytepopcount(Uchar byte) noexcept {
+    static constexpr Uchar NIBBLE_LOOKUP[16] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4};
+    return NIBBLE_LOOKUP[byte & 0x0F] + NIBBLE_LOOKUP[byte >> 4];
 }
 
 // this simple helper is not exported in the header
@@ -110,12 +110,14 @@ std::vector<std::uint8_t> dnacallowed(
 
     // check how many times the initial 2-bit pattern in x is repeated
     // by default checks up to all 32 2-bit slots but can stop early
+    // direction of checking is from the low (least significant) bits up.
     auto run_len = [](Ullong x,unsigned stop = 32) -> unsigned {
         const auto val0 = x & 3;
         unsigned n_run = 1;
         while(n_run < stop) {
             x >>= 2;
-            if( (x & 3) == val0) n_run++; else break;
+            if( (x & 3) == val0 ) n_run++; 
+            else break;
         }
         return n_run;
     };
@@ -259,7 +261,7 @@ size_t encoder::vbitlen(size_t num_msg_bits) const noexcept {
     return Pat.vbitsum(num_msg_bits);
 }
 
-VecUchar encoder::packvbits(const VecMbit& vbits, size_t msg_bits = 0) const {
+VecUchar encoder::packvbits(const VecUchar& vbits, size_t msg_bits = 0) const {
     
     const auto ksize = vbits.size();
     // no more than the specified number of bits if it is set
@@ -281,7 +283,7 @@ VecUchar encoder::packvbits(const VecMbit& vbits, size_t msg_bits = 0) const {
     return ans;
 }
 
-VecMbit encoder::unpackvbits(const std::string& message, std::uint32_t len=0) const {
+VecUchar encoder::unpackvbits(const std::string& message, std::uint32_t len=0) const {
     const size_t n = message.size();
     size_t nmb = 8*n; // # of bits in the message
     auto ksize = vbitlen(nmb);
@@ -326,7 +328,7 @@ GF4word encoder::encode(
     GF4reg prevcode = acgtacgt; // initialize with no runs and balanced cg
     const size_t nsp = NSP();
     for (size_t k = 0; k < nm; k++) { // on decoding, k is called seq
-        Mbit messagebit = vbits[k];
+        auto messagebit = vbits[k];
         if (k < LPRIMER) {
             salt = primersalt[k];
         }
@@ -356,20 +358,19 @@ GF4word encoder::encode(
 }
 
 int encoder::search_heap(
+    hypovec& hypostack,
     std::vector<Uchar>& text,
     unsigned msg_bits,
     unsigned hlimit) {
     
-        // given the heap, keep processing it until offset limit, hypothesis limit, or an error is reached
+    // given the heap, keep processing it until offset limit, hypothesis limit, or an error is reached
     const auto seqmax = vbitlen(msg_bits);
     const size_t limit{text.size()};
     int qq, qqmax = -1, ofmax = -1;
     constexpr std::array<int,3> skews{0,-1,1};
-    // GP::errcode = 0;
     while (true) {
-        const auto res = heap.pop();
-        double currscore = res.first;
-        qq = res.second;
+        const auto [currscore, val2] = heap.pop();
+        qq = val2;
         const auto hp = hypostack[qq];
         auto seq = hp.seq;
         
@@ -377,25 +378,44 @@ int encoder::search_heap(
             ofmax = hp.offset;
             qqmax = qq;
         }
-        if (currscore > 1.e10) break; // heap is empty (TODO: change this)
-        if (hp.offset >= limit-1) break; // errcode 0 (nominal success)
-        if (msg_bits > 0 && seq >= seqmax-1) break; // ditto when no. of message bits specified
+        if (currscore == heap.default_value()) break; // heap is empty (TODO: change this)
+        if (hp.offset >= limit - 1) break; // errcode 0 (nominal success)
+        if (msg_bits > 0 && seq >= seqmax - 1) break; // ditto when no. of message bits specified
         // TODO: fix error codes
         if (hypostack.size() > hlimit) { 
-            // GP::errcode = 2;
             return qqmax;
         }
 
         const int nguess = 1 << Pat[seq + 1]; // 1, 2, or 4
         for(auto skew : skews) {
             for (Uchar mbit = 0; mbit < nguess; mbit++) {
-                Hypothesis h();
-                if(h.init_from_predecessor(text, qq, mbit, skew)) {
+                Hypothesis<8,24> h;
+                if(h.init_from_predecessor(text, hp, qq, mbit, skew)) {
                     hypostack.push_back(h);
-                    heap.push(h.score,hypostack.size());
+                    heap.push(h.score);
                 }
             }
         }
     }
     return qq; // final position
+}
+
+std::string decoder::decode(GF4word data,unsigned msg_bits,unsigned hlimit) const {
+    hypovec hstack;
+    int final_pos = search_heap(hstack,data, msg_bits, hlimit);
+    // update global params (this need not be done here?)
+    // TODO - return a struct with the message and these extra fields
+    // auto finalscore = hstack[final_pos].score;
+    // auto finaloffset = hstack[final_pos].offset;
+    // auto finalseq = hstack[final_pos].seq;
+    std::string ans;
+    // populate the answer
+    size_t q = final_pos;
+    ans.push_back(hstack[q].message_bit);
+    while (hstack[q].predi > 0) {
+        ans.push_back(hstack[q].messagebit);
+        q = hstack[q].predi;
+    }
+    std::reverse(std::begin(ans),std::end(ans));
+    return ans;
 }
