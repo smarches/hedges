@@ -94,19 +94,16 @@ unsigned count_gc(Ullong prev,Ullong mask) noexcept {
 // satisfying GC and run-length constraints
 std::vector<std::uint8_t> dnacallowed(
     GF4reg prev,
-    const unsigned DNAWINDOW,
-    const unsigned MAXGC,
-    const unsigned MINGC,
-    const unsigned MAXRUN 
+    const DNA_params p
     ) {
     using VU = std::vector<std::uint8_t>;
     
-    if (DNAWINDOW == 0) {
+    if (p.DNA_window == 0) {
         return VU{0,1,2,3}; // no constraint
     }
     // used to set oldest to "A", assuming DNAWINDOW is less
     // than 32 (otherwise it'll get shifted away entirely)
-    const Ullong dnaoldmask((1ULL << 2 * (DNAWINDOW-1)) - 1);
+    const Ullong dnaoldmask((1ULL << 2 * (p.DNA_window - 1)) - 1);
 
     // check how many times the initial 2-bit pattern in x is repeated
     // by default checks up to all 32 2-bit slots but can stop early
@@ -122,12 +119,12 @@ std::vector<std::uint8_t> dnacallowed(
         return n_run;
     };
     // is there a run and, if so, of what
-    bool isrun = run_len(prev,MAXRUN) >= MAXRUN;
+    bool isrun = run_len(prev,p.max_run) >= p.max_run;
     const auto last = prev & 3;
     const auto gccount = countgc(prev,dnaoldmask);
     // the horrible logic tree:
     VU ans;
-    if (gccount >= MAXGC) {
+    if (gccount >= p.max_GC) {
         ans = {0,3}; // A, T OK
         if (isrun) {
             if (last == 0) {
@@ -137,7 +134,7 @@ std::vector<std::uint8_t> dnacallowed(
             }
         }
     }
-    else if (gccount <= MINGC) {
+    else if (gccount <= p.min_GC) {
         ans = {1,2}; // C, G OK
         if (isrun) {
             if (last == 1) {
@@ -291,7 +288,7 @@ VecUchar encoder::unpackvbits(const std::string& message, std::uint32_t len=0) c
     size_t size2 = len > rightprimer.size() ? len - rightprimer.size() : 0;
     // aim for codetext of length len if possible
     ksize = std::max(ksize,size2);
-    VecMbit ans(ksize,0);
+    VecUchar ans(ksize,0);
     size_t i = 0, j = 0;
     for (size_t k = 0; k < ksize; k++) {
         for (size_t k1 = 0; k1 < Pat[k]; k1++) {
@@ -311,14 +308,11 @@ size_t encoder::strand_len(size_t bytes) const noexcept {
 GF4word encoder::encode(
     std::string& message,
     size_t len,
-    const unsigned DNAWINDOW,
-    const unsigned MAXGC,
-    const unsigned MINGC,
-    const unsigned MAXRUN
+    DNA_params p
 ) const {
     static const Ullong prevmask{ (1ULL << D.nprev()) - 1 };
     static const Ullong saltmask{ (1ULL << D.hsalt()) - 1 };
-    const Ullong dnawinmask { (1ULL << 2 * DNAWINDOW) - 1 };
+    const Ullong dnawinmask { (1ULL << 2 * p.DNA_window) - 1 };
     
     GF4word vbits = unpackvbits(message, len);
     const auto nm{vbits.size()}; // number of variable bits encoded
@@ -343,7 +337,7 @@ GF4word encoder::encode(
             auto regout = D.digest(prevbits, k, salt, 4);
             codetext[k] = (regout + messagebit) % 4;
         } else {
-            const auto dnac_ok = dnacallowed(prevcode,DNAWINDOW,MAXGC,MINGC,MAXRUN);
+            const auto dnac_ok = dnacallowed(prevcode,p);
             int mod = dnac_ok.size();
             auto regout = D.digest(prevbits, k, salt, mod);
             regout = (regout + messagebit) % mod;
@@ -361,11 +355,13 @@ int encoder::search_heap(
     hypovec& hypostack,
     std::vector<Uchar>& text,
     unsigned msg_bits,
-    unsigned hlimit) {
+    unsigned hlimit) const {
     
     // given the heap, keep processing it until offset limit, hypothesis limit, or an error is reached
     const auto seqmax = vbitlen(msg_bits);
     const size_t limit{text.size()};
+    if(limit < 1) return 0;
+    HeapScheduler<double,size_t> heap(limit);
     int qq, qqmax = -1, ofmax = -1;
     constexpr std::array<int,3> skews{0,-1,1};
     while (true) {
@@ -379,8 +375,8 @@ int encoder::search_heap(
             qqmax = qq;
         }
         if (currscore == heap.default_value()) break; // heap is empty (TODO: change this)
-        if (hp.offset >= limit - 1) break; // errcode 0 (nominal success)
-        if (msg_bits > 0 && seq >= seqmax - 1) break; // ditto when no. of message bits specified
+        if (static_cast<unsigned>(hp.offset) + 1 >= limit) break; // errcode 0 (nominal success)
+        if (msg_bits > 0 && static_cast<size_t>(seq) + 1 >= seqmax) break; // ditto when no. of message bits specified
         // TODO: fix error codes
         if (hypostack.size() > hlimit) { 
             return qqmax;
@@ -400,7 +396,7 @@ int encoder::search_heap(
     return qq; // final position
 }
 
-std::string decoder::decode(GF4word data,unsigned msg_bits,unsigned hlimit) const {
+std::string encoder::decode(GF4word data,unsigned msg_bits,unsigned hlimit) const {
     hypovec hstack;
     int final_pos = search_heap(hstack,data, msg_bits, hlimit);
     // update global params (this need not be done here?)
@@ -411,10 +407,10 @@ std::string decoder::decode(GF4word data,unsigned msg_bits,unsigned hlimit) cons
     std::string ans;
     // populate the answer
     size_t q = final_pos;
-    ans.push_back(hstack[q].message_bit);
-    while (hstack[q].predi > 0) {
+    ans.push_back(hstack[q].messagebit);
+    while (hstack[q].pred_ix > 0) {
         ans.push_back(hstack[q].messagebit);
-        q = hstack[q].predi;
+        q = hstack[q].pred_ix;
     }
     std::reverse(std::begin(ans),std::end(ans));
     return ans;

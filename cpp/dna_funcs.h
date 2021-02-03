@@ -41,6 +41,18 @@ class simple_matrix {
     }
 };
 
+struct DNA_params {
+    unsigned DNA_window = 12;
+    unsigned max_GC = 8;
+    unsigned min_GC = 4;
+    unsigned max_run = 4;
+};
+
+// forward declaration for Hypothesis class below
+std::vector<std::uint8_t> dnacallowed(
+    GF4reg prev,
+    const DNA_params p
+    );
 // the key step in the encoding of sequential (groups of 8) bytes
 // baked-in parameters are 10, 24, 8 respectively
 template<unsigned SEQBITS,unsigned HSALT,unsigned NPREV>
@@ -137,7 +149,111 @@ class pattarr {
     }
 };
 
+// TODO: put hypothesis inside encoder, or forward declare enough of one or the other
+// fwd declaration
+class encoder;
+
+// default values are 8 and 24 resp.
+template<unsigned NPREV, unsigned HSALT>
+class Hypothesis {
+    static constexpr Ullong prevmask{(1ULL << NPREV) - 1};
+    static constexpr Ullong saltmask{(1ULL << HSALT) - 1};
+    std::uniform_real_distribution<> runif(-1.,1.);
+    static std::random_device rd;
+    static auto rng = std::mt19937(rd());
+    Ullong prevbits, salt, newsalt;
+    public:
+    size_t pred_ix, my_ix; // index of predecessor in hypostack
+    unsigned depth; // depth from root to this node
+    int offset; // next char in message
+    int seq; // my position in the decoded message (0,1,...)
+    double score; // my -logprob score before update (what update??)
+    float deletion, substitution, insertion, dither, reward; // various parameters that are probalbly never changed in practice
+    Uchar messagebit; // last decoded up to now
+    GF4reg prevcode;
+    // TODO: cleanup with default/delete
+    Hypothesis() {
+
+        pred_ix = 0; // the root element is its own predecessor
+        my_ix = 0;
+        depth = 0;
+        offset = -1;
+        seq = -1;
+        messagebit = 0; // not really a message bit
+        prevbits = 0;
+        score = 0.;
+        salt = 0;
+        newsalt = 0;
+        constexpr GF4reg acgtacgt{0x1b1b1b1b1b1b1b1bllu}; // "ACGTACGTACGTACGT"
+        prevcode = acgtacgt;
+    }
+
+    // does the same calculations as encode_C but just for the previous char rather than a whole message
+    // TODO: make this a constructor overload?
+    int init_from_predecessor(
+        const GF4reg& codetext,
+        const Hypothesis& hp,
+        const encoder& E,
+        Uchar mbit, 
+        int skew,
+        DNA_params p
+    ) {
+        const Ullong dnawinmask = (1ULL << 2 * p.DNA_window) - 1;
+
+        pred_ix = hp.pred_ix;
+        depth = hp.depth + 1;
+        messagebit = mbit; // variable number
+        seq = hp.seq + 1;  // always one longer than predecessor
+        prevbits = hp.prevbits;
+        salt = hp.salt;
+        Ullong mysalt;
+        const size_t nsp = E.NSP(), LPRIMER = E.leftprimer.size();
+        
+        if (seq < LPRIMER) {
+            mysalt = E.primersalt[seq];
+        }
+        else if (seq < nsp) {
+            mysalt = salt;
+            newsalt = ((hp.newsalt << 1) & saltmask) ^ messagebit; // variable bits overlap, but that's ok with XOR
+        }
+        else if (seq == nsp) {
+            mysalt = salt = hp.newsalt; // time to update the salt
+        }
+        else mysalt = salt;
+        offset = hp.offset + 1 + skew;
+        if (offset >= codetext.size()) return 0; // i.e., false
+        // calculate predicted message under this hypothesis
+        prevcode = hp.prevcode;
+        int regout;
+        if(seq < LPRIMER) {
+            regout = E.D.digest(prevbits, seq, mysalt, 4);    
+            regout = (regout + Uchar(messagebit)) % 4;
+        } else {
+            const auto dnac_ok = dnacallowed(prevcode,p);
+            int mod = dnac_ok.size();
+            regout = E.D.digest(prevbits, seq, mysalt, mod);
+            regout = (regout + Uchar(messagebit)) % mod;
+            regout = dnac_ok[regout];
+        }
+        int nbits = E.Pat[seq];
+        prevbits = ((hp.prevbits << nbits) & prevmask) | messagebit; // variable number
+        prevcode = ((prevcode << 2) | regout) & dnawinmask;
+        double mypenalty;
+        // compare to observed message and score
+        if (skew < 0) { // deletion
+            mypenalty = deletion;			
+        } else {
+            bool ismatch = regout == codetext[offset];  // the only place where a check is possible!
+            float adj = ismatch ? reward : substitution;
+            mypenalty = adj + (skew == 0) * insertion;
+        }
+        if (dither > 0.) mypenalty += dither * runif(rng);
+        score = hp.score + mypenalty;
+    }
+};
+
 using hypovec = std::vector<Hypothesis<8,24>>;
+
 class encoder {
     
     double reward;
@@ -169,109 +285,10 @@ public:
     GF4word encode(
         std::string& message,
         size_t len,
-        const unsigned DNAWINDOW = 12,
-        const unsigned MAXGC = 8,
-        const unsigned MINGC = 4,
-        const unsigned MAXRUN = 4
+        const DNA_params p
     ) const;
 
-    int search_heap(hypovec& hstack,std::vector<Uchar>& text,unsigned msg_bits,unsigned hlimit);
-    std::string decode(GF4word data) const;
+    int search_heap(hypovec& hstack,std::vector<Uchar>& text,unsigned msg_bits,unsigned hlimit) const;
+    std::string decode(GF4word data,unsigned msg_bits,unsigned hlimit) const;
 };
 
-// default values are 8 and 24 resp.
-template<unsigned NPREV, unsigned HSALT>
-class Hypothesis {
-    static constexpr Ullong prevmask{(1ULL << NPREV) - 1};
-    static constexpr Ullong saltmask{(1ULL << HSALT) - 1};
-    static std::mt19937 rng(std::random_device{}());
-    static std::uniform_real_distribution<double> runif(-1,1.);
-    Ullong prevbits, salt, newsalt;
-    public:
-    size_t pred_ix, my_ix; // index of predecessor in hypostack
-    int offset; // next char in message
-    int seq; // my position in the decoded message (0,1,...)
-    double score; // my -logprob score before update (what update??)
-    Uchar messagebit; // last decoded up to now
-    GF4reg prevcode;
-    // TODO: cleanup with default/delete
-    Hypothesis() {
-
-        pred_ix = 0; // the root element is its own predecessor
-        my_ix = 0;
-        offset = -1;
-        seq = -1;
-        messagebit = 0; // not really a message bit
-        prevbits = 0;
-        score = 0.;
-        salt = 0;
-        newsalt = 0;
-        constexpr GF4reg acgtacgt{0x1b1b1b1b1b1b1b1bllu}; // "ACGTACGTACGTACGT"
-        prevcode = acgtacgt;
-    }
-
-    // does the same calculations as encode_C but just for the previous char rather than a whole message
-    // TODO: make this a constructor overload?
-    int init_from_predecessor(
-        const GF4reg& codetext,
-        const Hypothesis& hp,
-        const Encoder& E,
-        Uchar mbit, 
-        int skew
-    ) {
-
-        const size_t LPRIMER{leftprimer.size()};
-        const Ullong dnawinmask = (1ULL << 2 * GP::DNAWINDOW) - 1;
-
-        pred_ix = hp.pred_ix;
-        messagebit = mbit; // variable number
-        seq = hp.seq + 1;  // always one longer than predecessor
-        prevbits = hp.prevbits;
-        salt = hp.salt;
-        Ullong mysalt;
-        const size_t nsp = E.NSP(), LPRIMER = E.leftprimer.size();
-        
-        if (seq < LPRIMER) {
-            mysalt = E.primersalt[seq];
-        }
-        else if (seq < nsp) {
-            mysalt = salt;
-            newsalt = ((hp.newsalt << 1) & saltmask) ^ messagebit; // variable bits overlap, but that's ok with XOR
-        }
-        else if (seq == nsp) {
-            mysalt = salt = hp.newsalt; // time to update the salt
-        }
-        else mysalt = salt;
-        offset = hp.offset + 1 + skew;
-        if (offset >= codetext.size()) return 0; // i.e., false
-        // calculate predicted message under this hypothesis
-        prevcode = hp.prevcode;
-        int regout;
-        if(seq < LPRIMER) {
-            regout = digest(prevbits, seq, mysalt, 4);    
-            regout = (regout + Uchar(messagebit)) % 4;
-        } else {
-            const auto dnac_ok = dnacallowed(
-                prevcode,GP::DNAWINDOW,GP::MAXGC,GP::MINGC,GP::MAXRUN
-            );
-            int mod = dnac_ok.size();
-            regout = digest(prevbits, seq, mysalt, mod);
-            regout = (regout + Uchar(messagebit)) % mod;
-            regout = dnac_ok[regout];
-        }
-        int nbits = E.Pat[seq];
-        prevbits = ((hp.prevbits << nbits) & prevmask) | messagebit; // variable number
-        prevcode = ((prevcode << 2) | regout) & dnawinmask;
-        double mypenalty;
-        // compare to observed message and score
-        if (skew < 0) { //deletion
-            mypenalty = GP::deletion;			
-        } else {
-            bool ismatch = regout == codetext[offset];  // the only place where a check is possible!
-            float adj = ismatch ? GP::reward : GP::substitution;
-            mypenalty = adj + (skew == 0) * GP::insertion;
-        }
-        if (dither > 0.) mypenalty += GP::dither * runif(rng);
-        score = hp.score + mypenalty;
-    }
-};

@@ -60,7 +60,7 @@ class HeapScheduler {
         }
         std::cout << "end heap\n";
     }
-    T default_value() constexpr noexcept {
+    constexpr T default_value() noexcept {
         return bigval;
     }
 };
